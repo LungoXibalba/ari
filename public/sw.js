@@ -1,7 +1,8 @@
 // ARI service worker: keeps a saved copy of the app so it opens with no signal.
 //
 // Update rule:
-//  - The page (index.html): network first. Online, you always get the newest version.
+//  - The page (index.html): network first, always asking the server whether it changed.
+//    Online, you get the newest version.
 //    Offline, or when the network answers nothing within 4 seconds, you get the saved copy.
 //  - Everything else the page lists (scripts, styles, icons, manifest): saved copy first.
 //    Script and style file names carry a fingerprint that changes with every build, so a
@@ -53,7 +54,10 @@ self.addEventListener('activate', (event) => {
 })
 
 async function answerPageRequest(event) {
-  const network = fetch(event.request)
+  // 'no-cache' makes the browser ask the server whether the page changed (a cheap check),
+  // instead of reusing its own stored copy. GitHub Pages marks pages "reusable for 10 minutes",
+  // and without this a new version could stay hidden for 10 minutes after any visit.
+  const network = fetch(event.request.url, { cache: 'no-cache' })
   const timeout = new Promise((resolve) => setTimeout(resolve, SLOW_NETWORK_MS, null))
   const first = await Promise.race([network.catch(() => null), timeout])
 
