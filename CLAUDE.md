@@ -28,17 +28,17 @@ An installable web app (PWA) for capturing material in the field and revisiting 
 | File | What it is for | What breaks without it |
 |---|---|---|
 | `package.json`, `package-lock.json` | Project identity, commands, exact package versions (only dependency: Vite 8) | `npm` and the GitHub build can't install tools; versions could drift |
-| `vite.config.js` | `base: '/ari/'`, the Pages sub-path | Built page asks for files at the site root and shows blank on Pages |
+| `vite.config.js` | `base: '/ari/'`, the Pages sub-path; stamps the build time into the page (`__BUILD_TIME__`) | Built page asks for files at the site root and shows blank on Pages; no way to tell which version a phone runs |
 | `index.html` | The single page; links the manifest, iOS meta tags, touch icon | No home-screen app behavior |
 | `public/manifest.webmanifest` | App name, `display: standalone`, colors, icons; `start_url` and `scope` are relative (`./`) so they follow `base` | Add to Home Screen makes a bookmark that opens in Safari |
 | `public/icons/` | Placeholder icons (180, 192, 512 px PNG). iOS ignores SVG icons | Generic icon on the home screen |
-| `src/main.js`, `src/style.css` | "Hello, ARI" page; shows whether it runs installed or in the browser; CSS keeps content clear of the notch (`env(safe-area-inset-*)`) | The page is empty |
-| `src/spike.js` | **Throwaway** test-session buttons (share, location, audio, dictation box, copy log). Delete it, and its import and `mountSpike(...)` call in `main.js`, once the results are logged | Nothing: the real app does not depend on it |
+| `src/main.js`, `src/style.css` | "Hello, ARI" page; shows installed vs browser, whether the offline copy is saved and whether the phone is online, and the build time; registers the service worker (built app only, not the dev server); CSS keeps content clear of the notch (`env(safe-area-inset-*)`) | The page is empty; the app never gets an offline copy |
+| `public/sw.js` | The service worker (a script the phone runs between the app and the network). Saves the page and the files it lists; page is network first (4 s limit), everything else saved copy first; deletes saved files the new page no longer lists. Static: it does not change between builds | Nothing opens without signal |
 | `.github/workflows/deploy.yml` | On push to `main`: `npm ci`, `npm run build`, publish `dist/` to Pages (Node 24) | No automatic deploy |
 | `.gitignore` | Keeps `node_modules/` and `dist/` out of git | Tens of thousands of files would go to GitHub |
 
 ## Status (2026-10-11)
-The installable skeleton exists, verified on an iPhone (opens full-screen from the home screen), plus the throwaway test-session page (pushed 2026-10-11, awaiting the owner's iPhone results). Not built yet: service worker, storage, camera, audio, location, export/import.
+The installable skeleton exists, verified on an iPhone (opens full-screen from the home screen). Step 1 (test session) is done and its test page removed. Step 2 (offline) is built and passes a local test (Firefox: load once online, stop the server, reload; new build replaces the old copy); not yet pushed or tested on the iPhone in airplane mode. Not built yet: storage, camera, audio recording, location capture, export/import.
 
 ## M1 order (agreed 2026-10-11)
 M1 finish line: a photo, a voice memo, and a text note captured on the iPhone survive closing the app, appear in the inbox with time and location, export to OneDrive, and import on the laptop. Work in this order, one step at a time; a failed test changes the plan before anything is built on it.
@@ -73,12 +73,15 @@ M1 finish line: a photo, a voice memo, and a text note captured on the iPhone su
 - **Voice to text:** use the iPhone keyboard's dictation key in a text box. Audio recording (the voice memo, M1 step 6) stays optional.
 - **Open question:** when is a recording deleted? Proposal: kept until the card is marked `processed`, then deleted unless the owner chooses to keep it.
 - **Browser speech recognition is skipped.** WebKit bug 225298 (closed as deferred) says it was unavailable in Home Screen web apps.
+- **Offline update rule (2026-10-11):** the page (`index.html`) is network first, with a 4 s limit before falling back to the saved copy; scripts and styles are saved-copy first (their file names carry a fingerprint, so a saved copy is never an old version of the same name); each fresh page rebuilds the saved set and deletes unused files. `public/sw.js` itself never changes, so phones never need to replace the worker.
+- **Voice memos must be recorded with the app in the foreground** unless the lock-screen test is ever run (the owner skipped it on 2026-10-11, so it is untested, not failed).
 
 ### Test results (fill in during step 1)
-- 1a share to OneDrive: not tested yet
-- 1b location permission in installed app (and seconds to arrive, accuracy): not tested yet
-- 1c audio format / playback on laptop / screen-lock recording: not tested yet
-- 1d dictation key in the text box, and whether the text survives closing the app: not tested yet
+First two runs, 2026-10-11 (iPhone, iOS 18.7, installed app). Still open: the lock-screen test and a few details, listed under each item.
+- 1a share to OneDrive: **works**, twice (including the audio file). The share sheet opens from the installed app, "Save to Files" to OneDrive works, and the files open on the laptop with the right content. Side effect: passing `title: 'ARI test file'` to `navigator.share` makes iOS also save a stray `text.txt` containing the title with every share. **Share files with no `title` or `text` field.**
+- 1b location: **works.** Accuracy 20 m. With permission already given, a fix arrived in 2.4 s (the first run's 17.5 s included answering the prompt). After the app was fully closed and reopened, the Permissions API reported `prompt` again, but iOS did **not** ask again when the button was tapped (owner report), so the Permissions API state is not a reliable guide. The code only asks for a position once per button press; nothing tracks location in the background. The Permissions API `change` event did not fire after allowing, so don't rely on it.
+- 1c audio: **recording works** (4.2 s and 4.8 s clips). `recorder.mimeType` is **empty (`""`) at start**; the real type is on the data: `audio/mp4; codecs=mp4a.40.2` (AAC). Store the type from the recorded blob, never from `recorder.mimeType`. Size varies with content (about 46 to 190 kbps). The clip plays back on the phone with the right duration. Files reached the laptop byte-for-byte intact through the share sheet. They are fragmented MP4 (brand `iso5`/`cmfc`, header duration 0), so some laptop players may show no duration or seeking; laptop playback result still to be confirmed. **The microphone asks for permission again on a new launch** (owner report): expect a prompt each time the app is reopened before recording. Lock-screen recording was skipped by the owner (both clips were under 5 s), so it is untested.
+- 1d text box: the typed text **survived fully closing the app** (restored 56 characters). The `localStorage` log also survived. Not tested: the dictation key itself. Observed oddity, parked by the owner: tapping a misspelled word did not show iOS's autocorrection suggestion.
 
 ## Notes
 - Pages updates take about a minute after a push; iOS may cache the old version, so close the app fully to see an update.
