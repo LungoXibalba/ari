@@ -1,4 +1,5 @@
 import './style.css'
+import { mountSpike } from './spike.js' // throwaway test session; remove with spike.js
 
 document.querySelector('#app').innerHTML = `
   <main>
@@ -13,3 +14,5 @@ const standalone = navigator.standalone || matchMedia('(display-mode: standalone
 document.querySelector('#mode').textContent = standalone
   ? 'Running as an installed app'
   : 'Running in the browser'
+
+mountSpike(document.querySelector('main'))
