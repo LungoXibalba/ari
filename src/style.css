@@ -6,11 +6,103 @@ body {
 }
 
 main {
+  box-sizing: border-box;
   min-height: 100vh;
+  max-width: 32rem;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  gap: 1.25rem;
   /* keep content clear of the notch and home bar on iPhone */
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  padding: calc(env(safe-area-inset-top) + 1rem) calc(env(safe-area-inset-right) + 1rem)
+    calc(env(safe-area-inset-bottom) + 1rem) calc(env(safe-area-inset-left) + 1rem);
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.capture {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+label {
+  font-size: 0.9rem;
+}
+
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.6rem;
+  font: inherit;
+  font-size: 1rem; /* 16 px or more stops iOS from zooming the page when the box is focused */
+  color: inherit;
+  background: #11141c;
+  border: 1px solid #44507a;
+  border-radius: 0.5rem;
+}
+
+button {
+  padding: 0.8rem;
+  font-size: 1rem;
+  color: inherit;
+  background: #2d3550;
+  border: 1px solid #44507a;
+  border-radius: 0.5rem;
+}
+
+button.small {
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+#message {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: 0.9rem;
+  color: #9fb0d8;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+li {
+  padding: 0.7rem;
+  background: #232a3b;
+  border-radius: 0.5rem;
+}
+
+li time {
+  font-size: 0.75rem;
+  color: #9fb0d8;
+}
+
+li p {
+  margin: 0.3rem 0 0.6rem;
+  white-space: pre-wrap; /* keep the line breaks of the note */
+  overflow-wrap: anywhere;
+}
+
+footer {
+  margin-top: auto;
+  font-size: 0.7rem;
+  color: #7f8cad;
+}
+
+footer p {
+  margin: 0.2rem 0;
 }

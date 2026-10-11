@@ -32,13 +32,18 @@ An installable web app (PWA) for capturing material in the field and revisiting 
 | `index.html` | The single page; links the manifest, iOS meta tags, touch icon | No home-screen app behavior |
 | `public/manifest.webmanifest` | App name, `display: standalone`, colors, icons; `start_url` and `scope` are relative (`./`) so they follow `base` | Add to Home Screen makes a bookmark that opens in Safari |
 | `public/icons/` | Placeholder icons (180, 192, 512 px PNG). iOS ignores SVG icons | Generic icon on the home screen |
-| `src/main.js`, `src/style.css` | "Hello, ARI" page; shows installed vs browser, whether the offline copy is saved, whether the server can be reached (a real fetch with a 3 s limit, not `navigator.onLine`), and the build time; registers the service worker (built app only, not the dev server); CSS keeps content clear of the notch (`env(safe-area-inset-*)`) | The page is empty; the app never gets an offline copy |
+| `src/main.js` | Assembles the page: heading, inbox, status footer | The page is empty |
+| `src/style.css` | Phone layout; keeps content clear of the notch (`env(safe-area-inset-*)`); 16 px inputs so iOS does not zoom | Unstyled, cramped page |
+| `src/cards.js` | The card's shape in one place (`newCard`); fields per "Card fields" below | Each part of the app would invent its own card shape |
+| `src/storage.js` | The only file that touches IndexedDB: `saveCard`, `getCard`, `listCards`, `deleteCard`. Stores `cards` and `media` (media blobs keyed by card id; unused until step 5). Replaceable (sync, other database) by changing this file alone | Nothing is kept after the app closes |
+| `src/inbox.js` | Note box, Save button, inbox list, Delete (with confirmation). Notes are shown with `textContent`, never as HTML | Nothing to type into or read |
+| `src/status.js` | Status lines (installed/browser, offline copy, server reachable, storage persistent, build time) and registers the service worker | No way to read test results on the phone; no offline copy |
 | `public/sw.js` | The service worker (a script the phone runs between the app and the network). Saves the page and the files it lists; page is network first (4 s limit), everything else saved copy first; deletes saved files the new page no longer lists. Static: it does not change between builds | Nothing opens without signal |
 | `.github/workflows/deploy.yml` | On push to `main`: `npm ci`, `npm run build`, publish `dist/` to Pages (Node 24) | No automatic deploy |
 | `.gitignore` | Keeps `node_modules/` and `dist/` out of git | Tens of thousands of files would go to GitHub |
 
 ## Status (2026-10-11)
-The installable skeleton exists, verified on an iPhone (opens full-screen from the home screen). Step 1 (test session) is done and its test page removed. Step 2 (offline) is live and **passed on the iPhone** (2026-10-11: airplane mode on, app fully closed and reopened, it opened and showed its build time) and in a local Firefox test (load once online, stop the server, reload; a new build replaces the old copy). The update path **failed on the iPhone** (an installed older build kept showing; the owner had to delete the app and re-add it from Safari). Cause: GitHub Pages sends pages with `Cache-Control: max-age=600`, and the worker's page fetch went through the browser's own cache, so for 10 minutes after any visit it re-read its stored copy. Fixed in `public/sw.js` by fetching the page with `cache: 'no-cache'` (ask the server whether it changed); reproduced and verified with a local test server that sends the same header (`vite preview` sends no such header and hid the bug). The fix is pushed only when the owner approves; after that, confirm on the phone that a newer build replaces the installed one without reinstalling. Not yet tested on the phone: the 4 s slow-network fallback. Not built yet: storage, camera, audio recording, location capture, export/import.
+The installable skeleton exists, verified on an iPhone (opens full-screen from the home screen). Step 1 (test session) is done and its test page removed. Step 2 (offline) is live and passed on the iPhone in airplane mode; its update path failed on the phone because of GitHub's 10-minute page caching, fixed and pushed (build 18:42 UTC); the owner will confirm on the phone that a newer build arrives without reinstalling. Step 3 (card fields) approved. Step 4 (storage + text notes) is built and tested locally (notes survive a reload, delete works, notes are never read as HTML); not yet pushed or tested on the iPhone. Not built yet: photo, voice memo, location capture, export/import.
 
 ## M1 order (agreed 2026-10-11)
 M1 finish line: a photo, a voice memo, and a text note captured on the iPhone survive closing the app, appear in the inbox with time and location, export to OneDrive, and import on the laptop. Work in this order, one step at a time; a failed test changes the plan before anything is built on it.
@@ -50,24 +55,28 @@ M1 finish line: a photo, a voice memo, and a text note captured on the iPhone su
    - d. (added 2026-10-11) Dictation: type into a plain text box using the iPhone keyboard's dictation (microphone) key; see whether the text survives closing the app (the box saves to `localStorage` as you type).
    - The test page also has a "Copy log" button (puts the on-page log on the clipboard so results can be pasted), and the location test logs seconds-to-arrive and accuracy in meters.
 2. **Offline:** service worker, tested in airplane mode. Explain the update rule before building it: a service worker decides when new versions reach the phone. A reasonable default is to fetch the page fresh when online and keep the hashed asset files cached.
-3. **Card fields:** the owner approves them (draft below) before any storage code.
-4. **Storage + text notes:** IndexedDB behind our own small interface so sync can replace it later. Text first: no permissions, so a failure points at storage alone.
+3. **Card fields:** approved 2026-10-11 (see below). DONE.
+4. **Storage + text notes:** IndexedDB behind our own small interface so sync can replace it later. Text first: no permissions, so a failure points at storage alone. (Built with the browser's IndexedDB directly instead of the Dexie library the plan mentions: about 60 lines, no new dependency, swappable behind `storage.js`.)
 5. **Photo:** native camera via a file input (`<input type="file" accept="image/*" capture>`). Location comes from the Geolocation API at capture time, not from the photo (iPhone strips it; unverified). Save the card at once and attach location when it arrives, so capture never waits for GPS.
 6. **Voice memo:** `MediaRecorder`; store `mimeType` with every recording, never assume a format.
 7. **Real export and import:** export in batches or one file per card (one big in-memory bundle can crash Safari; inference); import skips cards whose `id` already exists. Until export exists, captured items are at risk of Safari deleting site data.
 
-### Card fields (DRAFT, owner must approve before code)
-- `id`: random unique ID made on the phone, so imports never collide and importing twice skips duplicates.
-- `schemaVersion`: so old cards can be migrated later.
+### Card fields (APPROVED 2026-10-11, schemaVersion 1)
+Every card has all these fields; "optional" means the value is `null` (or `''` for `text`) when unused.
+- `id`: random unique ID made on the phone (`crypto.randomUUID()`), so imports never collide and importing twice skips duplicates.
+- `schemaVersion`: `1`. So old cards can be migrated later (new fields, such as a reliability note, arrive through a new version).
 - `kind`: `text`, `photo` or `audio`.
-- `created`, `updated`: times.
-- `location`: optional (permission can be denied, or no signal).
-- `text`: for notes.
-- `media`: the stored blob, plus `mimeType` and size.
+- `created`, `updated`: times as ISO 8601 UTC strings.
+- `text`: the note's text. **Allowed on every kind** (a caption or dictated note on a photo or recording). `''` when none.
 - `gist`: optional one-line summary in the owner's own words (the plan's one human step per card).
 - `source`: optional free text.
+- `place`: optional text the owner types (for example "Malmö University library, 3rd floor"). Separate from `location`.
+- `location`: optional `{ lat, lon, accuracy, at }`: latitude, longitude, accuracy in meters, time measured (ISO string). `null` if denied or no signal. The card is saved first and location attached when it arrives, so capture never waits for GPS.
+- `media`: optional `{ mimeType, size }`. The blob itself is stored in a separate object store keyed by the card `id`, so listing the inbox never loads photos or recordings. `mimeType` comes from the recorded data, never from `recorder.mimeType` (empty on iOS at start).
 - `status`: `inbox` or `processed`.
-- Left out on purpose for M1: tags (no tag upkeep; they matter once AI suggests them), change history (one user, no AI; add with the provenance record in M3), "seen, not relevant" (an M2 board state).
+- Left out on purpose for M1: tags (no tag upkeep; they matter once AI suggests them), change history (one user, no AI; add with the provenance record in M3), "seen, not relevant" (an M2 board state), a reliability note (the owner writes it in `text` when it matters; add a field via `schemaVersion` if needed).
+- Deleting a card is an action (inbox, step 4), not a field. Accepted for now: importing an old export can bring a deleted card back.
+- Audio cleanup rule (when a recording is deleted): decide later.
 
 ### Decisions (2026-10-11)
 - **Voice to text:** use the iPhone keyboard's dictation key in a text box. Audio recording (the voice memo, M1 step 6) stays optional.
