@@ -3,6 +3,7 @@
 import { describeLocation, newCard } from './cards.js'
 import { buildEditForm } from './edit-form.js'
 import { getLocation } from './location.js'
+import { startRecording } from './recorder.js'
 import { attachLocationEnabled, setAttachLocationEnabled } from './settings.js'
 import { deleteCard, getMedia, listCards, saveCard, saveCardWithMedia, updateCard } from './storage.js'
 
@@ -14,6 +15,7 @@ export function mountInbox(parent) {
       <label class="switch"><input id="location-switch" type="checkbox" /> Attach location when saving</label>
       <button id="save">Save note</button>
       <button id="photo">Take photo</button>
+      <button id="record">Record voice memo</button>
       <input id="photo-input" type="file" accept="image/*" capture="environment" hidden />
       <p id="message" role="status"></p>
     </section>
@@ -26,6 +28,7 @@ export function mountInbox(parent) {
   const note = parent.querySelector('#note')
   const locationSwitch = parent.querySelector('#location-switch')
   const photoInput = parent.querySelector('#photo-input')
+  const recordButton = parent.querySelector('#record')
   const message = parent.querySelector('#message')
   const count = parent.querySelector('#count')
   const list = parent.querySelector('#cards')
@@ -33,7 +36,7 @@ export function mountInbox(parent) {
   locationSwitch.checked = attachLocationEnabled()
   locationSwitch.onchange = () => setAttachLocationEnabled(locationSwitch.checked)
 
-  let photoUrls = [] // object URLs for the photos on screen; released on the next render
+  let mediaUrls = [] // object URLs for the photos and recordings on screen; released on the next render
   let renderCount = 0
   let editing = null // { id, node } while a card's Edit form is open
 
@@ -54,13 +57,21 @@ export function mountInbox(parent) {
       item.append(gist)
     }
 
-    if (card.kind === 'photo' && blob) {
+    if (blob) {
       const url = URL.createObjectURL(blob)
-      photoUrls.push(url)
-      const image = document.createElement('img')
-      image.src = url
-      image.alt = 'Photo'
-      item.append(image)
+      mediaUrls.push(url)
+      if (card.kind === 'photo') {
+        const image = document.createElement('img')
+        image.src = url
+        image.alt = 'Photo'
+        item.append(image)
+      } else if (card.kind === 'audio') {
+        const audio = document.createElement('audio')
+        audio.controls = true
+        audio.preload = 'metadata'
+        audio.src = url
+        item.append(audio)
+      }
     }
 
     if (card.text) {
@@ -142,8 +153,8 @@ export function mountInbox(parent) {
     const blobs = await Promise.all(cards.map((card) => (card.media ? getMedia(card.id) : null)))
     if (thisRender !== renderCount) return // a newer render has started; drop this one
 
-    photoUrls.forEach((url) => URL.revokeObjectURL(url))
-    photoUrls = []
+    mediaUrls.forEach((url) => URL.revokeObjectURL(url))
+    mediaUrls = []
 
     count.textContent = `(${cards.length})`
     // A card with its Edit form open keeps its existing element, so a refresh
@@ -216,6 +227,55 @@ export function mountInbox(parent) {
       if (wantsLocation) await attachLocation(card)
     } catch (error) {
       message.textContent = `Could not save the photo: ${error.name}`
+    }
+  }
+
+  // Voice memo: tap to start, tap again to stop. The card is saved when the recording ends,
+  // whether you stopped it or the system did.
+  let recording = null
+
+  async function saveRecording(blob) {
+    if (!blob) {
+      message.textContent = 'Nothing was recorded.'
+      return
+    }
+    const wantsLocation = locationSwitch.checked
+    const card = newCard({ kind: 'audio' })
+    card.media = { mimeType: blob.type, size: blob.size } // the type comes from the recording, never assumed
+    await saveCardWithMedia(card, blob)
+    message.textContent = wantsLocation ? 'Recording saved. Looking for location...' : 'Recording saved. Location is off.'
+    await render()
+    if (wantsLocation) await attachLocation(card)
+  }
+
+  recordButton.onclick = async () => {
+    if (recording) {
+      recording.stop()
+      return
+    }
+    try {
+      recording = await startRecording()
+    } catch (error) {
+      message.textContent = `Could not record: ${error.name === 'NotAllowedError' ? 'microphone not allowed' : error.message}`
+      return
+    }
+    const startedAt = Date.now()
+    const timer = setInterval(() => {
+      recordButton.textContent = `Stop recording (${Math.floor((Date.now() - startedAt) / 1000)} s)`
+    }, 250)
+    recordButton.classList.add('recording')
+    recordButton.textContent = 'Stop recording (0 s)'
+    message.textContent = 'Recording. Keep the app open on screen.'
+
+    const blob = await recording.finished
+    clearInterval(timer)
+    recording = null
+    recordButton.classList.remove('recording')
+    recordButton.textContent = 'Record voice memo'
+    try {
+      await saveRecording(blob)
+    } catch (error) {
+      message.textContent = `Could not save the recording: ${error.name}`
     }
   }
 
