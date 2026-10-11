@@ -32,13 +32,13 @@ An installable web app (PWA) for capturing material in the field and revisiting 
 | `index.html` | The single page; links the manifest, iOS meta tags, touch icon | No home-screen app behavior |
 | `public/manifest.webmanifest` | App name, `display: standalone`, colors, icons; `start_url` and `scope` are relative (`./`) so they follow `base` | Add to Home Screen makes a bookmark that opens in Safari |
 | `public/icons/` | Placeholder icons (180, 192, 512 px PNG). iOS ignores SVG icons | Generic icon on the home screen |
-| `src/main.js`, `src/style.css` | "Hello, ARI" page; shows installed vs browser, whether the offline copy is saved and whether the phone is online, and the build time; registers the service worker (built app only, not the dev server); CSS keeps content clear of the notch (`env(safe-area-inset-*)`) | The page is empty; the app never gets an offline copy |
+| `src/main.js`, `src/style.css` | "Hello, ARI" page; shows installed vs browser, whether the offline copy is saved, whether the server can be reached (a real fetch with a 3 s limit, not `navigator.onLine`), and the build time; registers the service worker (built app only, not the dev server); CSS keeps content clear of the notch (`env(safe-area-inset-*)`) | The page is empty; the app never gets an offline copy |
 | `public/sw.js` | The service worker (a script the phone runs between the app and the network). Saves the page and the files it lists; page is network first (4 s limit), everything else saved copy first; deletes saved files the new page no longer lists. Static: it does not change between builds | Nothing opens without signal |
 | `.github/workflows/deploy.yml` | On push to `main`: `npm ci`, `npm run build`, publish `dist/` to Pages (Node 24) | No automatic deploy |
 | `.gitignore` | Keeps `node_modules/` and `dist/` out of git | Tens of thousands of files would go to GitHub |
 
 ## Status (2026-10-11)
-The installable skeleton exists, verified on an iPhone (opens full-screen from the home screen). Step 1 (test session) is done and its test page removed. Step 2 (offline) is built and passes a local test (Firefox: load once online, stop the server, reload; new build replaces the old copy); not yet pushed or tested on the iPhone in airplane mode. Not built yet: storage, camera, audio recording, location capture, export/import.
+The installable skeleton exists, verified on an iPhone (opens full-screen from the home screen). Step 1 (test session) is done and its test page removed. Step 2 (offline) is live and **passed on the iPhone** (2026-10-11: airplane mode on, app fully closed and reopened, it opened and showed its build time) and in a local Firefox test (load once online, stop the server, reload; a new build replaces the old copy). Not yet tested on the phone: the update path (a newer build arriving over an installed older one) and the 4 s slow-network fallback. Not built yet: storage, camera, audio recording, location capture, export/import.
 
 ## M1 order (agreed 2026-10-11)
 M1 finish line: a photo, a voice memo, and a text note captured on the iPhone survive closing the app, appear in the inbox with time and location, export to OneDrive, and import on the laptop. Work in this order, one step at a time; a failed test changes the plan before anything is built on it.
@@ -84,6 +84,7 @@ First two runs, 2026-10-11 (iPhone, iOS 18.7, installed app). Still open: the lo
 - 1d text box: the typed text **survived fully closing the app** (restored 56 characters). The `localStorage` log also survived. Not tested: the dictation key itself. Observed oddity, parked by the owner: tapping a misspelled word did not show iOS's autocorrection suggestion.
 
 ## Notes
+- `navigator.onLine` is wrong on iOS: it said "online" in airplane mode. Test reachability with a real fetch instead.
 - Pages updates take about a minute after a push; iOS may cache the old version, so close the app fully to see an update.
 - Replace the placeholder icons with real artwork at some point.
 - The deploy workflow shows a Node 20 deprecation notice for `checkout@v4` and `setup-node@v4`; harmless for now, bump versions eventually.

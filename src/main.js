@@ -26,20 +26,41 @@ if (canWorkOffline) {
   navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`)
 }
 
-// Show whether the saved copy exists and whether the phone is online right now.
+// Can the server be reached right now? Asks for a small file and waits up to 3 seconds.
+// navigator.onLine is not used: iOS reports "online" even in airplane mode.
+// The ?ping part makes the address new each time, so the service worker has no saved copy
+// of it and the request really goes to the network.
+async function serverReachable() {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 3000)
+  try {
+    await fetch(`${import.meta.env.BASE_URL}manifest.webmanifest?ping=${Date.now()}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    return true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Show whether the saved copy exists and whether the server can be reached right now.
 async function showOfflineStatus() {
   const element = document.querySelector('#offline')
-  const network = navigator.onLine ? 'online' : 'offline'
-  if (!canWorkOffline) {
-    element.textContent = `Offline copy: not used in development. Now ${network}`
-    return
+  let copy = 'Offline copy: not used in development'
+  if (canWorkOffline) {
+    await navigator.serviceWorker.ready
+    const files = (await (await caches.open('ari-shell')).keys()).length
+    copy = files ? `Offline copy saved (${files} files)` : 'Offline copy not saved yet'
   }
-  await navigator.serviceWorker.ready
-  const files = (await (await caches.open('ari-shell')).keys()).length
-  element.textContent = files
-    ? `Offline copy saved (${files} files). Now ${network}`
-    : `Offline copy not saved yet. Now ${network}`
+  const reachable = await serverReachable()
+  element.textContent = `${copy}. Server ${reachable ? 'reachable' : 'not reachable'} (${new Date().toLocaleTimeString()})`
 }
 showOfflineStatus()
 addEventListener('online', showOfflineStatus)
 addEventListener('offline', showOfflineStatus)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') showOfflineStatus()
+})
