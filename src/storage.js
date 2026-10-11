@@ -46,6 +46,33 @@ export function getCard(id) {
   return inTransaction('cards', 'readonly', (tx) => tx.objectStore('cards').get(id))
 }
 
+// Save a card together with its photo or recording, all-or-nothing: either both are stored or neither.
+export function saveCardWithMedia(card, blob) {
+  return inTransaction(['cards', 'media'], 'readwrite', (tx) => {
+    tx.objectStore('media').put(blob, card.id)
+    return tx.objectStore('cards').put(card)
+  })
+}
+
+// The photo or recording blob for a card (undefined if it has none).
+export function getMedia(id) {
+  return inTransaction('media', 'readonly', (tx) => tx.objectStore('media').get(id))
+}
+
+// Change fields on a card that is already saved (for example, attach a location that arrived later).
+// Reads and writes inside one transaction, so two updates cannot overwrite each other.
+export function updateCard(id, changes) {
+  return inTransaction('cards', 'readwrite', (tx) => {
+    const store = tx.objectStore('cards')
+    const read = store.get(id)
+    read.onsuccess = () => {
+      if (!read.result) return // the card was deleted in the meantime
+      store.put({ ...read.result, ...changes, updated: new Date().toISOString() })
+    }
+    return read
+  })
+}
+
 // All cards, newest first.
 export async function listCards() {
   const cards = await inTransaction('cards', 'readonly', (tx) => tx.objectStore('cards').getAll())
