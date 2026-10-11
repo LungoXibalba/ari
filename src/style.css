@@ -97,6 +97,53 @@ li p {
   overflow-wrap: anywhere;
 }
 
+label.switch {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.95rem;
+}
+
+label.switch input {
+  width: 1.3rem;
+  height: 1.3rem;
+}
+
+li button + button {
+  margin-left: 0.5rem;
+}
+
+li p.gist {
+  margin: 0.3rem 0 0;
+  font-weight: 600;
+}
+
+form.edit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+form.edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: #9fb0d8;
+}
+
+input[type='text'] {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0.6rem;
+  font: inherit;
+  font-size: 1rem; /* 16 px or more stops iOS from zooming the page when the box is focused */
+  color: #e8eefc;
+  background: #11141c;
+  border: 1px solid #44507a;
+  border-radius: 0.5rem;
+}
+
 li img {
   display: block;
   width: 100%;

@@ -20,3 +20,8 @@ export function newCard({ kind, text = '' }) {
     status: 'inbox', // 'inbox' or 'processed'
   }
 }
+
+// Coordinates as readable text, e.g. "55.58231, 12.99992 (within 20 m)".
+export function describeLocation(location) {
+  return `${location.lat.toFixed(5)}, ${location.lon.toFixed(5)} (within ${location.accuracy} m)`
+}
