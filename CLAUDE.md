@@ -33,11 +33,12 @@ An installable web app (PWA) for capturing material in the field and revisiting 
 | `public/manifest.webmanifest` | App name, `display: standalone`, colors, icons; `start_url` and `scope` are relative (`./`) so they follow `base` | Add to Home Screen makes a bookmark that opens in Safari |
 | `public/icons/` | Placeholder icons (180, 192, 512 px PNG). iOS ignores SVG icons | Generic icon on the home screen |
 | `src/main.js`, `src/style.css` | "Hello, ARI" page; shows whether it runs installed or in the browser; CSS keeps content clear of the notch (`env(safe-area-inset-*)`) | The page is empty |
+| `src/spike.js` | **Throwaway** test-session buttons (share, location, audio, dictation box, copy log). Delete it, and its import and `mountSpike(...)` call in `main.js`, once the results are logged | Nothing: the real app does not depend on it |
 | `.github/workflows/deploy.yml` | On push to `main`: `npm ci`, `npm run build`, publish `dist/` to Pages (Node 24) | No automatic deploy |
 | `.gitignore` | Keeps `node_modules/` and `dist/` out of git | Tens of thousands of files would go to GitHub |
 
 ## Status (2026-10-11)
-Only the empty installable skeleton exists, verified on an iPhone (opens full-screen from the home screen). Not built yet: service worker, storage, camera, audio, location, export/import.
+The installable skeleton exists, verified on an iPhone (opens full-screen from the home screen), plus the throwaway test-session page (pushed 2026-10-11, awaiting the owner's iPhone results). Not built yet: service worker, storage, camera, audio, location, export/import.
 
 ## M1 order (agreed 2026-10-11)
 M1 finish line: a photo, a voice memo, and a text note captured on the iPhone survive closing the app, appear in the inbox with time and location, export to OneDrive, and import on the laptop. Work in this order, one step at a time; a failed test changes the plan before anything is built on it.
@@ -46,6 +47,8 @@ M1 finish line: a photo, a voice memo, and a text note captured on the iPhone su
    - a. Share a small file from the installed app into OneDrive via the share sheet; open it on the laptop. (Plain blob downloads in installed iPhone web apps are said to be unreliable; unverified.)
    - b. How location permission behaves in the installed app (re-asked on every launch? unverified).
    - c. Record 10 s of audio; note its format and `mimeType`; play it on the laptop; lock the screen mid-recording and see whether recording continues.
+   - d. (added 2026-10-11) Dictation: type into a plain text box using the iPhone keyboard's dictation (microphone) key; see whether the text survives closing the app (the box saves to `localStorage` as you type).
+   - The test page also has a "Copy log" button (puts the on-page log on the clipboard so results can be pasted), and the location test logs seconds-to-arrive and accuracy in meters.
 2. **Offline:** service worker, tested in airplane mode. Explain the update rule before building it: a service worker decides when new versions reach the phone. A reasonable default is to fetch the page fresh when online and keep the hashed asset files cached.
 3. **Card fields:** the owner approves them (draft below) before any storage code.
 4. **Storage + text notes:** IndexedDB behind our own small interface so sync can replace it later. Text first: no permissions, so a failure points at storage alone.
@@ -66,10 +69,16 @@ M1 finish line: a photo, a voice memo, and a text note captured on the iPhone su
 - `status`: `inbox` or `processed`.
 - Left out on purpose for M1: tags (no tag upkeep; they matter once AI suggests them), change history (one user, no AI; add with the provenance record in M3), "seen, not relevant" (an M2 board state).
 
+### Decisions (2026-10-11)
+- **Voice to text:** use the iPhone keyboard's dictation key in a text box. Audio recording (the voice memo, M1 step 6) stays optional.
+- **Open question:** when is a recording deleted? Proposal: kept until the card is marked `processed`, then deleted unless the owner chooses to keep it.
+- **Browser speech recognition is skipped.** WebKit bug 225298 (closed as deferred) says it was unavailable in Home Screen web apps.
+
 ### Test results (fill in during step 1)
 - 1a share to OneDrive: not tested yet
-- 1b location permission in installed app: not tested yet
+- 1b location permission in installed app (and seconds to arrive, accuracy): not tested yet
 - 1c audio format / playback on laptop / screen-lock recording: not tested yet
+- 1d dictation key in the text box, and whether the text survives closing the app: not tested yet
 
 ## Notes
 - Pages updates take about a minute after a push; iOS may cache the old version, so close the app fully to see an update.
