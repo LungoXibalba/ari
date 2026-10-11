@@ -32,7 +32,7 @@ export function buildEditForm(card, { onSave, onCancel, onRemoveLocation }) {
 
   addField(form, card.kind === 'text' ? 'Note' : 'Caption or note', text)
   addField(form, 'Gist (one line, your own words)', gist)
-  addField(form, 'Place (for example, Malmö University library, 3rd floor)', place)
+  addField(form, 'Place (for example, Central Library, 2nd floor)', place)
   addField(form, 'Source', source)
 
   if (card.location) {

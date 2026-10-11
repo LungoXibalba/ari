@@ -73,7 +73,7 @@ Every card has all these fields; "optional" means the value is `null` (or `''` f
 - `text`: the note's text. **Allowed on every kind** (a caption or dictated note on a photo or recording). `''` when none.
 - `gist`: optional one-line summary in the owner's own words (the plan's one human step per card).
 - `source`: optional free text.
-- `place`: optional text the owner types (for example "Malmö University library, 3rd floor"). Separate from `location`.
+- `place`: optional text the owner types (for example "Central Library, 2nd floor"). Separate from `location`.
 - `location`: optional `{ lat, lon, accuracy, at }`: latitude, longitude, accuracy in meters, time measured (ISO string). `null` if denied or no signal. The card is saved first and location attached when it arrives, so capture never waits for GPS.
 - `media`: optional `{ mimeType, size }`. The blob itself is stored in a separate object store keyed by the card `id`, so listing the inbox never loads photos or recordings. `mimeType` comes from the recorded data, never from `recorder.mimeType` (empty on iOS at start).
 - `status`: `inbox` or `processed`.
