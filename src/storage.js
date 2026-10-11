@@ -4,22 +4,33 @@
 // Two stores:
 //  - 'cards': one record per card, found by its id.
 //  - 'media': the photo or recording blob for a card, found by the same id. Kept apart so that
-//    listing the inbox never loads large files. (Used from step 5; created now so no upgrade is needed.)
+//    listing the inbox never loads large files.
+//  - 'exports': for each card that has been exported (or imported), the `updated` time it had then.
+//    A card counts as "new or changed" when it has no record here or its `updated` is later.
 
 const DB_NAME = 'ari'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 let opening
 
 function openDatabase() {
   opening ??= new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result
-      db.createObjectStore('cards', { keyPath: 'id' })
-      db.createObjectStore('media') // key is supplied when saving: the card id
+      if (event.oldVersion < 1) {
+        db.createObjectStore('cards', { keyPath: 'id' })
+        db.createObjectStore('media') // key is supplied when saving: the card id
+      }
+      if (event.oldVersion < 2) {
+        db.createObjectStore('exports', { keyPath: 'id' }) // { id, updated }
+      }
     }
-    request.onsuccess = () => resolve(request.result)
+    request.onsuccess = () => {
+      // If a newer version of the app needs to upgrade the database, let go of it instead of blocking the upgrade.
+      request.result.onversionchange = () => request.result.close()
+      resolve(request.result)
+    }
     request.onerror = () => reject(request.error)
   })
   return opening
@@ -79,10 +90,26 @@ export async function listCards() {
   return cards.sort((a, b) => b.created.localeCompare(a.created))
 }
 
-// Remove a card and its media together.
+// Remove a card, its media and its export record together.
 export function deleteCard(id) {
-  return inTransaction(['cards', 'media'], 'readwrite', (tx) => {
+  return inTransaction(['cards', 'media', 'exports'], 'readwrite', (tx) => {
     tx.objectStore('media').delete(id)
+    tx.objectStore('exports').delete(id)
     return tx.objectStore('cards').delete(id)
+  })
+}
+
+// Export records as { [cardId]: updatedTimeWhenExported }.
+export async function listExportRecords() {
+  const records = await inTransaction('exports', 'readonly', (tx) => tx.objectStore('exports').getAll())
+  return Object.fromEntries(records.map((record) => [record.id, record.updated]))
+}
+
+// Remember that these cards were exported (or imported) as they were at the given `updated` time.
+// `records` is a list of { id, updated }.
+export function markExported(records) {
+  return inTransaction('exports', 'readwrite', (tx) => {
+    const store = tx.objectStore('exports')
+    records.forEach((record) => store.put(record))
   })
 }

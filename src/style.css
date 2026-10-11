@@ -71,6 +71,33 @@ button.small {
   color: #9fb0d8;
 }
 
+#notice {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.9rem;
+  background: #4a3a1c;
+  border: 1px solid #a8872f;
+  border-radius: 0.5rem;
+}
+
+#backup section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+#backup p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #9fb0d8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#batches:empty {
+  display: none;
+}
+
 ul {
   margin: 0;
   padding: 0;

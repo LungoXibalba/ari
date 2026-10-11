@@ -18,6 +18,7 @@ export function mountInbox(parent) {
       <button id="record">Record voice memo</button>
       <input id="photo-input" type="file" accept="image/*" capture="environment" hidden />
       <p id="message" role="status"></p>
+      <p id="notice" role="alert" hidden></p>
     </section>
     <section>
       <h2>Inbox <span id="count"></span></h2>
@@ -30,6 +31,7 @@ export function mountInbox(parent) {
   const photoInput = parent.querySelector('#photo-input')
   const recordButton = parent.querySelector('#record')
   const message = parent.querySelector('#message')
+  const notice = parent.querySelector('#notice')
   const count = parent.querySelector('#count')
   const list = parent.querySelector('#cards')
 
@@ -85,6 +87,13 @@ export function mountInbox(parent) {
     const parts = [card.place, card.location && describeLocation(card.location)].filter(Boolean)
     where.textContent = parts.length ? parts.join(' · ') : 'No location'
     item.append(where)
+
+    if (card.media && !blob) {
+      const missing = document.createElement('p')
+      missing.className = 'where'
+      missing.textContent = 'The photo or recording file is missing. Import this card again with its file selected.'
+      item.append(missing)
+    }
 
     if (card.source) {
       const source = document.createElement('p')
@@ -178,6 +187,7 @@ export function mountInbox(parent) {
     } else {
       list.replaceChildren(...items)
     }
+    window.dispatchEvent(new Event('cards-changed')) // lets the backup section update its counts
   }
 
   // The card is already saved. Now ask for the position once and attach it if it arrives.
@@ -259,7 +269,20 @@ export function mountInbox(parent) {
       message.textContent = `Could not record: ${error.name === 'NotAllowedError' ? 'microphone not allowed' : error.message}`
       return
     }
+    notice.hidden = true
     const startedAt = Date.now()
+
+    // iOS stops the microphone when the app leaves the screen. Stop and save at once, while the page
+    // can still run, instead of waiting to be told the microphone ended.
+    let leftScreen = false
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden' && recording) {
+        leftScreen = true
+        recording.stop()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     const timer = setInterval(() => {
       recordButton.textContent = `Stop recording (${Math.floor((Date.now() - startedAt) / 1000)} s)`
     }, 250)
@@ -269,6 +292,7 @@ export function mountInbox(parent) {
 
     const blob = await recording.finished
     clearInterval(timer)
+    document.removeEventListener('visibilitychange', onVisibility)
     recording = null
     recordButton.classList.remove('recording')
     recordButton.textContent = 'Record voice memo'
@@ -276,10 +300,20 @@ export function mountInbox(parent) {
       await saveRecording(blob)
     } catch (error) {
       message.textContent = `Could not save the recording: ${error.name}`
+      return
+    }
+    // Stays on screen until the next recording starts, so it is seen even after the location message.
+    if (leftScreen) {
+      notice.textContent = blob
+        ? 'The recording stopped because the app left the screen. What was recorded up to that moment is saved as a card.'
+        : 'The recording stopped because the app left the screen, and nothing had been recorded.'
+      notice.hidden = false
     }
   }
 
   render().catch((error) => {
     message.textContent = `Could not open storage: ${error.name}`
   })
+
+  return { render }
 }
