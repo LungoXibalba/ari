@@ -1,15 +1,19 @@
-// Turns cards into files for sharing. Each batch is one small index file (.json) listing the cards in
+// Turns captures into files for sharing. Each batch is one small index file (.json) listing the captures in
 // the batch, plus each photo or recording as a normal file (.jpg / .m4a) next to it.
-// Also splits the cards into batches and shares a batch. The format is described in CLAUDE.md ("Export files").
+// Also splits the captures into batches and shares a batch. The format is described in CLAUDE.md ("Export files").
+// Trashed captures are exported too, so that the trash reaches the other device.
 
-import { getMedia, listCards, listExportRecords } from './storage.js'
+import { getMedia, listCaptures, listExportRecords } from './storage.js'
 
-export const FORMAT = 'ari-cards' // current: one index file per batch
-export const FORMAT_VERSION = 2
-export const OLD_FORMAT = 'ari-card' // version 1: one file per card; still readable on import
-export const OLD_FORMAT_VERSION = 1
+export const FORMAT = 'ari-captures' // current: one index file per batch
+export const FORMAT_VERSION = 1
+// Earlier formats, from when captures were called cards. Still readable on import, never written.
+export const LEGACY_INDEX_FORMAT = 'ari-cards' // version 2: one index file per batch
+export const LEGACY_INDEX_VERSION = 2
+export const LEGACY_SINGLE_FORMAT = 'ari-card' // version 1: one file per card
+export const LEGACY_SINGLE_VERSION = 1
 
-// A batch ends when adding the next card would pass either limit. A single card larger than the
+// A batch ends when adding the next capture would pass either limit. A single capture larger than the
 // size limit goes alone in its own batch (a photo or recording cannot be split).
 // The size limit is a guess: no test has shared anything bigger than about 100 KB (see CLAUDE.md).
 export const MAX_BATCH_BYTES = 25 * 1024 * 1024
@@ -38,19 +42,19 @@ export function extensionFor(mimeType) {
 }
 
 // A media file name that sorts by time and cannot collide: ari-2026-10-11T19-28-03Z-3f2a9c1e
-export function fileBaseName(card) {
-  const time = card.created.replace(/:/g, '-').replace(/\.\d+Z$/, 'Z')
-  return `ari-${time}-${card.id.slice(0, 8)}`
+export function fileBaseName(capture) {
+  const time = capture.created.replace(/:/g, '-').replace(/\.\d+Z$/, 'Z')
+  return `ari-${time}-${capture.id.slice(0, 8)}`
 }
 
-// Cards that were never exported, or were changed after they were.
-export function changedCards(cards, records) {
-  return cards.filter((card) => !(card.id in records) || card.updated > records[card.id])
+// Captures that were never exported, or were changed after they were (moving to the trash counts as a change).
+export function changedCaptures(captures, records) {
+  return captures.filter((capture) => !(capture.id in records) || capture.updated > records[capture.id])
 }
 
 // Pure batching rule, kept separate so it can be tested on its own.
-// `entries` are { card: { id, updated }, item, files: File[] (media only), bytes } in the order they should be shared.
-// Returns batches of { items, files, cards, bytes }; the index file is added later, so one file is reserved for it.
+// `entries` are { capture: { id, updated }, item, files: File[] (media only), bytes } in the order they should be shared.
+// Returns batches of { items, files, captures, bytes }; the index file is added later, so one file is reserved for it.
 export function planBatches(entries, maxBytes = MAX_BATCH_BYTES, maxFiles = MAX_BATCH_FILES) {
   const batches = []
   let current = null
@@ -58,57 +62,57 @@ export function planBatches(entries, maxBytes = MAX_BATCH_BYTES, maxFiles = MAX_
     const fits =
       current && current.bytes + entry.bytes <= maxBytes && current.files.length + entry.files.length + 1 <= maxFiles
     if (!fits) {
-      current = { items: [], files: [], cards: [], bytes: 0 }
+      current = { items: [], files: [], captures: [], bytes: 0 }
       batches.push(current)
     }
     current.items.push(entry.item)
     current.files.push(...entry.files)
-    current.cards.push(entry.card)
+    current.captures.push(entry.capture)
     current.bytes += entry.bytes
   }
   return batches
 }
 
-async function buildEntry(card) {
+async function buildEntry(capture) {
   const files = []
   let mediaFile = null
-  if (card.media) {
-    const blob = await getMedia(card.id)
+  if (capture.media) {
+    const blob = await getMedia(capture.id)
     if (blob) {
-      mediaFile = `${fileBaseName(card)}.${extensionFor(card.media.mimeType)}`
-      const type = baseMimeType(card.media.mimeType) || 'application/octet-stream'
+      mediaFile = `${fileBaseName(capture)}.${extensionFor(capture.media.mimeType)}`
+      const type = baseMimeType(capture.media.mimeType) || 'application/octet-stream'
       files.push(new File([blob], mediaFile, { type }))
     }
   }
-  const item = { card, mediaFile }
+  const item = { capture, mediaFile }
   return {
-    card: { id: card.id, updated: card.updated }, // the `updated` time as exported, not as it may be edited later
+    capture: { id: capture.id, updated: capture.updated }, // the `updated` time as exported, not as it may be edited later
     item,
     files,
     bytes: files.reduce((total, file) => total + file.size, 0) + JSON.stringify(item).length,
   }
 }
 
-// Number of cards that are new or changed since they were last exported.
+// Number of captures that are new or changed since they were last exported (trashed ones included).
 export async function countChanged() {
-  const [cards, records] = await Promise.all([listCards(), listExportRecords()])
-  return { changed: changedCards(cards, records).length, total: cards.length }
+  const [captures, records] = await Promise.all([listCaptures('all'), listExportRecords()])
+  return { changed: changedCaptures(captures, records).length, total: captures.length }
 }
 
 // Build the files and the batches. Nothing is shared or marked yet.
 export async function prepareExport({ onlyChanged }) {
-  const [cards, records] = await Promise.all([listCards(), listExportRecords()])
-  const chosen = (onlyChanged ? changedCards(cards, records) : cards).sort((a, b) => a.created.localeCompare(b.created))
+  const [captures, records] = await Promise.all([listCaptures('all'), listExportRecords()])
+  const chosen = (onlyChanged ? changedCaptures(captures, records) : captures).sort((a, b) => a.created.localeCompare(b.created))
   const entries = []
-  for (const card of chosen) entries.push(await buildEntry(card))
+  for (const capture of chosen) entries.push(await buildEntry(capture))
   const batches = planBatches(entries)
 
   // One index file per batch. The time in its name is the same for every batch of this export, so they sort together.
   const exportedAt = new Date().toISOString()
   const stamp = exportedAt.replace(/:/g, '-').replace(/\.\d+Z$/, 'Z')
   batches.forEach((batch, index) => {
-    const indexJson = JSON.stringify({ format: FORMAT, formatVersion: FORMAT_VERSION, exportedAt, cards: batch.items }, null, 2)
-    const name = `ari-cards-${stamp}-${index + 1}of${batches.length}.json`
+    const indexJson = JSON.stringify({ format: FORMAT, formatVersion: FORMAT_VERSION, exportedAt, captures: batch.items }, null, 2)
+    const name = `ari-captures-${stamp}-${index + 1}of${batches.length}.json`
     batch.files.unshift(new File([indexJson], name, { type: 'application/json' }))
   })
   return batches

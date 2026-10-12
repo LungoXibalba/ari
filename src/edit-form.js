@@ -1,7 +1,7 @@
-// The Edit form for one card: text, place, gist, source, and removing the coordinates.
+// The Edit form for one capture: text, title, place, source, and removing the coordinates.
 // It only builds the form; the caller decides what saving, cancelling and removing do.
 
-import { describeLocation } from './cards.js'
+import { describeLocation } from './captures.js'
 
 function addField(form, labelText, control) {
   const label = document.createElement('label')
@@ -17,28 +17,28 @@ function textInput(value) {
   return input
 }
 
-// onSave({ text, place, gist, source }) gets the typed values.
+// onSave({ text, title, place, source }) gets the typed values.
 // onRemoveLocation() asks the caller to remove the coordinates and returns true if it did.
-export function buildEditForm(card, { onSave, onCancel, onRemoveLocation }) {
+export function buildEditForm(capture, { onSave, onCancel, onRemoveLocation }) {
   const form = document.createElement('form')
   form.className = 'edit'
 
   const text = document.createElement('textarea')
   text.rows = 4
-  text.value = card.text
-  const gist = textInput(card.gist)
-  const place = textInput(card.place)
-  const source = textInput(card.source)
+  text.value = capture.text
+  const title = textInput(capture.title)
+  const place = textInput(capture.place)
+  const source = textInput(capture.source)
 
-  addField(form, card.kind === 'text' ? 'Note' : 'Caption or note', text)
-  addField(form, 'Gist (one line, your own words)', gist)
+  addField(form, capture.kind === 'text' ? 'Note' : 'Caption or note', text)
+  addField(form, 'Title (optional, one line)', title)
   addField(form, 'Place (for example, Central Library, 2nd floor)', place)
   addField(form, 'Source', source)
 
-  if (card.location) {
+  if (capture.location) {
     const row = document.createElement('p')
     row.className = 'where'
-    row.textContent = `Coordinates: ${describeLocation(card.location)} `
+    row.textContent = `Coordinates: ${describeLocation(capture.location)} `
 
     const remove = document.createElement('button')
     remove.type = 'button'
@@ -63,7 +63,7 @@ export function buildEditForm(card, { onSave, onCancel, onRemoveLocation }) {
 
   form.onsubmit = (event) => {
     event.preventDefault()
-    onSave({ text: text.value, place: place.value, gist: gist.value, source: source.value })
+    onSave({ text: text.value, title: title.value, place: place.value, source: source.value })
   }
   return form
 }

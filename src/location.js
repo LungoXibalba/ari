@@ -1,6 +1,6 @@
 // Ask for the current position once. Never tracks: one request per call, only when called.
 // Resolves with { lat, lon, accuracy, at } or null (denied, no signal, or too slow).
-// The shape matches the card's `location` field (see CLAUDE.md, "Card fields").
+// The shape matches the capture's `location` field (see CLAUDE.md, "Capture fields").
 
 export function getLocation({ timeoutMs = 20000 } = {}) {
   return new Promise((resolve) => {

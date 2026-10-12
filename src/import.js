@@ -1,68 +1,85 @@
-// Reads files made by export.js and saves their cards. Safe to run twice: a card whose id already
+// Reads files made by export.js and saves their captures. Safe to run twice: a capture whose id already
 // exists is replaced only if the incoming `updated` time is newer; otherwise it is skipped.
+// Also reads the two earlier formats, from when captures were called cards, and converts them on the way in.
 
-import { SCHEMA_VERSION } from './cards.js'
-import { FORMAT, FORMAT_VERSION, OLD_FORMAT, OLD_FORMAT_VERSION } from './export.js'
-import { getCard, getMedia, markExported, saveCard, saveCardWithMedia } from './storage.js'
+import { SCHEMA_VERSION, upgradeCapture } from './captures.js'
+import {
+  FORMAT,
+  FORMAT_VERSION,
+  LEGACY_INDEX_FORMAT,
+  LEGACY_INDEX_VERSION,
+  LEGACY_SINGLE_FORMAT,
+  LEGACY_SINGLE_VERSION,
+} from './export.js'
+import { getCapture, getMedia, markExported, saveCapture, saveCaptureWithMedia } from './storage.js'
 
 const KINDS = ['text', 'photo', 'audio']
-const STATUSES = ['inbox', 'processed']
 
 const isText = (value) => typeof value === 'string'
 const isTextOrNull = (value) => value === null || typeof value === 'string'
 const isTime = (value) => isText(value) && !Number.isNaN(Date.parse(value))
 const isNumber = (value) => typeof value === 'number' && Number.isFinite(value)
 
-// Check an incoming card and return a clean copy with only the known fields. Throws a readable error if it is not usable.
-export function cleanCard(card) {
-  if (!card || typeof card !== 'object') throw new Error('no card in the file')
-  if (!isText(card.id) || !card.id || card.id.length > 100) throw new Error('card has no valid id')
-  if (!isNumber(card.schemaVersion)) throw new Error('card has no schema version')
-  if (card.schemaVersion > SCHEMA_VERSION) throw new Error('made by a newer version of the app; update the app first')
-  if (!KINDS.includes(card.kind)) throw new Error(`unknown card kind "${card.kind}"`)
-  if (!isTime(card.created) || !isTime(card.updated)) throw new Error('card has no valid times')
-  if (!isText(card.text)) throw new Error('card text is missing')
-  if (!STATUSES.includes(card.status)) throw new Error(`unknown status "${card.status}"`)
-  for (const field of ['gist', 'source', 'place']) {
-    if (!isTextOrNull(card[field])) throw new Error(`"${field}" must be text or empty`)
+// Check an incoming capture and return a clean copy with only the known fields. Throws a readable error if it is not usable.
+// A capture saved under an earlier schema is brought up to the current one first.
+export function cleanCapture(raw) {
+  if (!raw || typeof raw !== 'object') throw new Error('no capture in the file')
+  if (!isText(raw.id) || !raw.id || raw.id.length > 100) throw new Error('capture has no valid id')
+  if (!isNumber(raw.schemaVersion)) throw new Error('capture has no schema version')
+  if (raw.schemaVersion > SCHEMA_VERSION) throw new Error('made by a newer version of the app; update the app first')
+  if (!KINDS.includes(raw.kind)) throw new Error(`unknown capture kind "${raw.kind}"`)
+  if (!isTime(raw.created) || !isTime(raw.updated)) throw new Error('capture has no valid times')
+  if (!isText(raw.text)) throw new Error('capture text is missing')
+
+  const capture = upgradeCapture(raw)
+  for (const field of ['title', 'source', 'place']) {
+    if (!isTextOrNull(capture[field])) throw new Error(`"${field}" must be text or empty`)
   }
-  const place = card.location
+  if (capture.deleted !== null && !isTime(capture.deleted)) throw new Error('capture trash time is not valid')
+  const place = capture.location
   if (place !== null && !(place && isNumber(place.lat) && isNumber(place.lon) && isNumber(place.accuracy) && isText(place.at))) {
-    throw new Error('card location is not valid')
+    throw new Error('capture location is not valid')
   }
-  const media = card.media
+  const media = capture.media
   if (media !== null && !(media && isText(media.mimeType) && isNumber(media.size))) {
-    throw new Error('card media information is not valid')
+    throw new Error('capture media information is not valid')
   }
   return {
-    id: card.id,
-    schemaVersion: card.schemaVersion,
-    kind: card.kind,
-    created: card.created,
-    updated: card.updated,
-    text: card.text,
-    gist: card.gist,
-    source: card.source,
-    place: card.place,
+    id: capture.id,
+    schemaVersion: SCHEMA_VERSION,
+    kind: capture.kind,
+    created: capture.created,
+    updated: capture.updated,
+    text: capture.text,
+    title: capture.title,
+    source: capture.source,
+    place: capture.place,
     location: place && { lat: place.lat, lon: place.lon, accuracy: place.accuracy, at: place.at },
     media: media && { mimeType: media.mimeType, size: media.size },
-    status: card.status,
+    deleted: capture.deleted,
   }
 }
 
-// The list of { card, mediaFile } in one index file. Reads the current format (one index per batch)
-// and the old one (one file per card).
+// The list of { capture, mediaFile } in one index file. Reads the current format and both earlier ones
+// (one index per batch with `cards`, and one file per card).
 function readItems(parsed) {
   if (parsed?.format === FORMAT) {
     if (!isNumber(parsed.formatVersion) || parsed.formatVersion > FORMAT_VERSION) {
       throw new Error('made by a newer version of the app; update the app first')
     }
-    if (!Array.isArray(parsed.cards)) throw new Error('the file lists no cards')
-    return parsed.cards
+    if (!Array.isArray(parsed.captures)) throw new Error('the file lists no captures')
+    return parsed.captures.map((item) => ({ capture: item?.capture, mediaFile: item?.mediaFile }))
   }
-  if (parsed?.format === OLD_FORMAT) {
-    if (parsed.formatVersion !== OLD_FORMAT_VERSION) throw new Error('made by a newer version of the app; update the app first')
-    return [{ card: parsed.card, mediaFile: parsed.mediaFile }]
+  if (parsed?.format === LEGACY_INDEX_FORMAT) {
+    if (!isNumber(parsed.formatVersion) || parsed.formatVersion > LEGACY_INDEX_VERSION) {
+      throw new Error('made by a newer version of the app; update the app first')
+    }
+    if (!Array.isArray(parsed.cards)) throw new Error('the file lists no cards')
+    return parsed.cards.map((item) => ({ capture: item?.card, mediaFile: item?.mediaFile }))
+  }
+  if (parsed?.format === LEGACY_SINGLE_FORMAT) {
+    if (parsed.formatVersion !== LEGACY_SINGLE_VERSION) throw new Error('made by a newer version of the app; update the app first')
+    return [{ capture: parsed.card, mediaFile: parsed.mediaFile }]
   }
   throw new Error('not an ARI export file')
 }
@@ -88,20 +105,20 @@ export async function importFiles(fileList) {
       continue
     }
 
-    // Each card is handled on its own, so one bad card does not stop the others.
+    // Each capture is handled on its own, so one bad capture does not stop the others.
     for (const item of items) {
-      const label = `${file.name}, card ${String(item?.card?.id ?? '?').slice(0, 8)}`
+      const label = `${file.name}, capture ${String(item?.capture?.id ?? '?').slice(0, 8)}`
       try {
-        const card = cleanCard(item?.card)
+        const capture = cleanCapture(item?.capture)
 
         // The photo or recording: found by the file name written in the index, and checked by size.
         let blob = null
-        let mediaProblem = null // only reported if the card is actually imported or updated
-        if (card.media) {
+        let mediaProblem = null // only reported if the capture is actually imported or updated
+        if (capture.media) {
           const mediaName = isText(item.mediaFile) ? item.mediaFile : null
           const mediaFile = mediaName && byName.get(mediaName)
-          if (mediaFile && mediaFile.size === card.media.size) {
-            blob = new Blob([mediaFile], { type: card.media.mimeType })
+          if (mediaFile && mediaFile.size === capture.media.size) {
+            blob = new Blob([mediaFile], { type: capture.media.mimeType })
             usedNames.add(mediaFile.name)
           } else if (!mediaName) {
             mediaProblem = `${label}: exported without its photo or recording`
@@ -112,17 +129,17 @@ export async function importFiles(fileList) {
           }
         }
 
-        const existing = await getCard(card.id)
+        const existing = await getCapture(capture.id)
         let action = 'skipped'
         if (!existing) action = 'imported'
-        else if (card.updated > existing.updated) action = 'updated'
-        else if (blob && existing.media && !(await getMedia(card.id))) action = 'updated' // restores a missing file
+        else if (capture.updated > existing.updated) action = 'updated'
+        else if (blob && existing.media && !(await getMedia(capture.id))) action = 'updated' // restores a missing file
 
         if (action !== 'skipped') {
           if (mediaProblem) report.problems.push(mediaProblem)
           // Without a usable file, an existing photo or recording stays as it is.
-          await (blob ? saveCardWithMedia(card, blob) : saveCard(card))
-          marks.push({ id: card.id, updated: card.updated })
+          await (blob ? saveCaptureWithMedia(capture, blob) : saveCapture(capture))
+          marks.push({ id: capture.id, updated: capture.updated })
         }
         report[action]++
       } catch (error) {
@@ -136,7 +153,7 @@ export async function importFiles(fileList) {
     report.problems.push(`${unused.length} other file(s) were not used: ${unused.map((file) => file.name).join(', ')}`)
   }
 
-  // Cards that came from files count as exported, so they are not offered as "new" again on this device.
+  // Captures that came from files count as exported, so they are not offered as "new" again on this device.
   if (marks.length) await markExported(marks)
   return report
 }

@@ -140,7 +140,7 @@ li button + button {
   margin-left: 0.5rem;
 }
 
-li p.gist {
+li p.title {
   margin: 0.3rem 0 0;
   font-weight: 600;
 }
@@ -206,4 +206,19 @@ footer {
 
 footer p {
   margin: 0.2rem 0;
+}
+
+details {
+  margin-top: 0.4rem;
+}
+
+summary {
+  padding: 0.5rem 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#trashed li {
+  background: #1b2030;
 }

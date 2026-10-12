@@ -29,13 +29,13 @@ export function mountBackup(parent, { refreshInbox }) {
   async function refreshSummary() {
     try {
       const { changed, total } = await countChanged()
-      summary.textContent = `${changed} of ${total} cards are new or changed since they were last exported.`
+      summary.textContent = `${changed} of ${total} captures are new or changed since they were last exported.`
     } catch {
       summary.textContent = ''
     }
   }
   refreshSummary()
-  addEventListener('cards-changed', refreshSummary) // sent by the inbox whenever the cards change
+  addEventListener('captures-changed', refreshSummary) // sent by the inbox whenever the captures change
 
   async function startExport({ onlyChanged }) {
     batchList.replaceChildren()
@@ -48,16 +48,16 @@ export function mountBackup(parent, { refreshInbox }) {
       return
     }
     if (!batches.length) {
-      message.textContent = onlyChanged ? 'Nothing new or changed to export.' : 'No cards to export.'
+      message.textContent = onlyChanged ? 'Nothing new or changed to export.' : 'No captures to export.'
       return
     }
-    const cardTotal = batches.reduce((total, batch) => total + batch.cards.length, 0)
-    message.textContent = `${cardTotal} card(s) in ${batches.length} batch(es). Tap Share on each batch and choose where to save it (for example Save to Files, then OneDrive).`
+    const captureTotal = batches.reduce((total, batch) => total + batch.captures.length, 0)
+    message.textContent = `${captureTotal} capture(s) in ${batches.length} batch(es). Tap Share on each batch and choose where to save it (for example Save to Files, then OneDrive).`
 
     batches.forEach((batch, index) => {
       const item = document.createElement('li')
       const label = document.createElement('span')
-      label.textContent = `Batch ${index + 1} of ${batches.length}: ${batch.cards.length} card(s), ${batch.files.length} file(s), ${formatBytes(batch.bytes)} `
+      label.textContent = `Batch ${index + 1} of ${batches.length}: ${batch.captures.length} capture(s), ${batch.files.length} file(s), ${formatBytes(batch.bytes)} `
       const share = document.createElement('button')
       share.className = 'small'
       share.textContent = 'Share'
@@ -67,7 +67,7 @@ export function mountBackup(parent, { refreshInbox }) {
           const result = await shareBatch(batch)
           if (result === 'shared') {
             // Marked only now, after the share sheet reported success. A cancelled or failed share marks nothing.
-            await markExported(batch.cards)
+            await markExported(batch.captures)
             label.textContent = `Batch ${index + 1} of ${batches.length}: shared. `
             share.remove()
             message.textContent = `Batch ${index + 1} shared and marked as exported.`

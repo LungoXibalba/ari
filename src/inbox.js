@@ -1,13 +1,24 @@
-// The capture screen: write a text note or take a photo, see the inbox, edit and delete cards.
+// The capture screen: write a text note, take a photo or record a voice memo, see the inbox, edit captures,
+// move them to the trash and take them back out.
 
-import { describeLocation, newCard } from './cards.js'
+import { describeLocation, newCapture } from './captures.js'
 import { buildEditForm } from './edit-form.js'
 import { formatBytes } from './format.js'
 import { getLocation } from './location.js'
 import { shrinkPhoto } from './photo.js'
 import { startRecording } from './recorder.js'
 import { attachLocationEnabled, setAttachLocationEnabled } from './settings.js'
-import { deleteCard, getMedia, listCards, saveCard, saveCardWithMedia, updateCard } from './storage.js'
+import {
+  getMedia,
+  listCaptures,
+  restoreCapture,
+  saveCapture,
+  saveCaptureWithMedia,
+  trashCapture,
+  updateCapture,
+} from './storage.js'
+
+const KIND_NAMES = { text: 'Note', photo: 'Photo', audio: 'Voice memo' }
 
 export function mountInbox(parent) {
   parent.innerHTML = `
@@ -24,8 +35,13 @@ export function mountInbox(parent) {
     </section>
     <section>
       <h2>Inbox <span id="count"></span></h2>
-      <ul id="cards"></ul>
+      <ul id="captures"></ul>
     </section>
+    <details id="trash">
+      <summary>Trash <span id="trash-count"></span></summary>
+      <p>Moved here instead of being deleted. Restore brings a capture back to the inbox.</p>
+      <ul id="trashed"></ul>
+    </details>
   `
 
   const note = parent.querySelector('#note')
@@ -35,41 +51,43 @@ export function mountInbox(parent) {
   const message = parent.querySelector('#message')
   const notice = parent.querySelector('#notice')
   const count = parent.querySelector('#count')
-  const list = parent.querySelector('#cards')
+  const list = parent.querySelector('#captures')
+  const trashCount = parent.querySelector('#trash-count')
+  const trashList = parent.querySelector('#trashed')
 
   locationSwitch.checked = attachLocationEnabled()
   locationSwitch.onchange = () => setAttachLocationEnabled(locationSwitch.checked)
 
   let mediaUrls = [] // object URLs for the photos and recordings on screen; released on the next render
   let renderCount = 0
-  let editing = null // { id, node } while a card's Edit form is open
+  let editing = null // { id, node } while a capture's Edit form is open
 
-  // The normal view of one card.
-  function buildCardItem(card, blob) {
+  // The normal view of one capture.
+  function buildCaptureItem(capture, blob) {
     const item = document.createElement('li')
 
     const time = document.createElement('time')
-    time.dateTime = card.created
-    time.textContent = new Date(card.created).toLocaleString()
+    time.dateTime = capture.created
+    time.textContent = new Date(capture.created).toLocaleString()
     item.append(time)
 
     // textContent, never innerHTML: everything typed is user data and must not be read as page code
-    if (card.gist) {
-      const gist = document.createElement('p')
-      gist.className = 'gist'
-      gist.textContent = card.gist
-      item.append(gist)
+    if (capture.title) {
+      const title = document.createElement('p')
+      title.className = 'title'
+      title.textContent = capture.title
+      item.append(title)
     }
 
     if (blob) {
       const url = URL.createObjectURL(blob)
       mediaUrls.push(url)
-      if (card.kind === 'photo') {
+      if (capture.kind === 'photo') {
         const image = document.createElement('img')
         image.src = url
         image.alt = 'Photo'
         item.append(image)
-      } else if (card.kind === 'audio') {
+      } else if (capture.kind === 'audio') {
         const audio = document.createElement('audio')
         audio.controls = true
         audio.preload = 'metadata'
@@ -78,71 +96,97 @@ export function mountInbox(parent) {
       }
     }
 
-    if (card.text) {
+    if (capture.text) {
       const text = document.createElement('p')
-      text.textContent = card.text
+      text.textContent = capture.text
       item.append(text)
     }
 
     const where = document.createElement('p')
     where.className = 'where'
-    const parts = [card.place, card.location && describeLocation(card.location)].filter(Boolean)
+    const parts = [capture.place, capture.location && describeLocation(capture.location)].filter(Boolean)
     where.textContent = parts.length ? parts.join(' · ') : 'No location'
     item.append(where)
 
-    if (card.media && !blob) {
+    if (capture.media && !blob) {
       const missing = document.createElement('p')
       missing.className = 'where'
-      missing.textContent = 'The photo or recording file is missing. Import this card again with its file selected.'
+      missing.textContent = 'The photo or recording file is missing. Import this capture again with its file selected.'
       item.append(missing)
     }
 
-    if (card.source) {
+    if (capture.source) {
       const source = document.createElement('p')
       source.className = 'where'
-      source.textContent = `Source: ${card.source}`
+      source.textContent = `Source: ${capture.source}`
       item.append(source)
     }
 
     const edit = document.createElement('button')
     edit.textContent = 'Edit'
     edit.className = 'small'
-    edit.onclick = () => startEdit(card, item)
+    edit.onclick = () => startEdit(capture, item)
 
     const remove = document.createElement('button')
-    remove.textContent = 'Delete'
+    remove.textContent = 'Move to trash'
     remove.className = 'small'
     remove.onclick = async () => {
-      if (!confirm('Delete this card? This cannot be undone.')) return
-      await deleteCard(card.id)
+      await trashCapture(capture.id)
+      message.textContent = 'Moved to the trash. Restore it from Trash below.'
       await render()
     }
     item.append(edit, remove)
     return item
   }
 
-  function startEdit(card, item) {
+  // A trashed capture: one short line and a Restore button. Its photo or recording is not loaded.
+  function buildTrashItem(capture) {
+    const item = document.createElement('li')
+
+    const time = document.createElement('time')
+    time.dateTime = capture.created
+    time.textContent = new Date(capture.created).toLocaleString()
+    item.append(time)
+
+    const summary = document.createElement('p')
+    const firstLine = (capture.title || capture.text).split('\n')[0].slice(0, 80)
+    summary.textContent = firstLine ? `${KIND_NAMES[capture.kind]}: ${firstLine}` : KIND_NAMES[capture.kind]
+    item.append(summary)
+
+    const restore = document.createElement('button')
+    restore.textContent = 'Restore'
+    restore.className = 'small'
+    restore.onclick = async () => {
+      await restoreCapture(capture.id)
+      message.textContent = 'Restored to the inbox.'
+      await render()
+    }
+    item.append(restore)
+    return item
+  }
+
+  function startEdit(capture, item) {
     if (editing) {
       message.textContent = 'Finish or cancel the open edit first.'
       return
     }
-    const finish = async (note) => {
+    const finish = async (text) => {
       editing = null
-      if (note) message.textContent = note
+      if (text) message.textContent = text
       await render()
     }
-    editing = { id: card.id, node: item }
+    editing = { id: capture.id, node: item }
     item.replaceChildren(
-      buildEditForm(card, {
+      buildEditForm(capture, {
         onSave: async (values) => {
           const text = values.text.trim()
-          if (card.kind === 'text' && !text) {
+          if (capture.kind === 'text' && !text) {
             message.textContent = 'A note needs text.'
             return
           }
-          await updateCard(card.id, {
+          await updateCapture(capture.id, {
             text,
-            gist: values.gist.trim() || null,
+            title: values.title.trim() || null,
             place: values.place.trim() || null,
             source: values.source.trim() || null,
           })
@@ -150,8 +194,8 @@ export function mountInbox(parent) {
         },
         onCancel: () => finish(),
         onRemoveLocation: async () => {
-          if (!confirm('Remove the coordinates from this card? This cannot be undone.')) return false
-          await updateCard(card.id, { location: null })
+          if (!confirm('Remove the coordinates from this capture? This cannot be undone.')) return false
+          await updateCapture(capture.id, { location: null })
           return true
         },
       }),
@@ -160,43 +204,47 @@ export function mountInbox(parent) {
 
   async function render() {
     const thisRender = ++renderCount
-    const cards = await listCards()
-    const blobs = await Promise.all(cards.map((card) => (card.media ? getMedia(card.id) : null)))
+    const captures = await listCaptures('active')
+    const trashed = await listCaptures('trashed')
+    const blobs = await Promise.all(captures.map((capture) => (capture.media ? getMedia(capture.id) : null)))
     if (thisRender !== renderCount) return // a newer render has started; drop this one
 
     mediaUrls.forEach((url) => URL.revokeObjectURL(url))
     mediaUrls = []
 
-    count.textContent = `(${cards.length})`
-    // A card with its Edit form open keeps its existing element, so a refresh
+    count.textContent = `(${captures.length})`
+    trashCount.textContent = trashed.length ? `(${trashed.length})` : ''
+    trashList.replaceChildren(...trashed.map(buildTrashItem))
+
+    // A capture with its Edit form open keeps its existing element, so a refresh
     // (for example, a location arriving) never wipes what is being typed.
-    const items = cards.map((card, index) =>
-      editing && card.id === editing.id ? editing.node : buildCardItem(card, blobs[index]),
+    const items = captures.map((capture, index) =>
+      editing && capture.id === editing.id ? editing.node : buildCaptureItem(capture, blobs[index]),
     )
-    if (!cards.length) {
+    if (!captures.length) {
       const empty = document.createElement('li')
-      empty.textContent = 'No cards yet.'
+      empty.textContent = 'No captures yet.'
       items.push(empty)
     }
 
     const open = editing && items.indexOf(editing.node)
     if (editing && open !== -1 && editing.node.parentNode === list) {
-      // Taking an element out of the page makes the browser drop its keyboard focus, so the card
-      // being edited stays in place and only the cards around it are swapped.
+      // Taking an element out of the page makes the browser drop its keyboard focus, so the capture
+      // being edited stays in place and only the captures around it are swapped.
       for (const child of [...list.children]) if (child !== editing.node) child.remove()
       items.slice(0, open).forEach((item) => list.insertBefore(item, editing.node))
       items.slice(open + 1).forEach((item) => list.append(item))
     } else {
       list.replaceChildren(...items)
     }
-    window.dispatchEvent(new Event('cards-changed')) // lets the backup section update its counts
+    window.dispatchEvent(new Event('captures-changed')) // lets the backup section update its counts
   }
 
-  // The card is already saved. Now ask for the position once and attach it if it arrives.
-  async function attachLocation(card) {
+  // The capture is already saved. Now ask for the position once and attach it if it arrives.
+  async function attachLocation(capture) {
     const location = await getLocation()
     if (location) {
-      await updateCard(card.id, { location })
+      await updateCapture(capture.id, { location })
       message.textContent = 'Saved with location.'
     } else {
       message.textContent = 'Saved. No location (denied, no signal, or too slow).'
@@ -212,12 +260,12 @@ export function mountInbox(parent) {
     }
     try {
       const wantsLocation = locationSwitch.checked
-      const card = newCard({ kind: 'text', text })
-      await saveCard(card)
+      const capture = newCapture({ kind: 'text', text })
+      await saveCapture(capture)
       note.value = ''
       message.textContent = wantsLocation ? 'Saved. Looking for location...' : 'Saved. Location is off.'
       await render()
-      if (wantsLocation) await attachLocation(card)
+      if (wantsLocation) await attachLocation(capture)
     } catch (error) {
       message.textContent = `Could not save: ${error.name}`
     }
@@ -233,21 +281,21 @@ export function mountInbox(parent) {
       const wantsLocation = locationSwitch.checked
       message.textContent = 'Shrinking the photo...'
       const photo = await shrinkPhoto(file)
-      const card = newCard({ kind: 'photo' })
-      card.media = { mimeType: photo.type || file.type, size: photo.size } // the type comes from the data, never assumed
-      await saveCardWithMedia(card, photo)
+      const capture = newCapture({ kind: 'photo' })
+      capture.media = { mimeType: photo.type || file.type, size: photo.size } // the type comes from the data, never assumed
+      await saveCaptureWithMedia(capture, photo)
       const sizes = `${formatBytes(file.size)} to ${formatBytes(photo.size)}`
       message.textContent = wantsLocation
         ? `Photo saved (${sizes}). Looking for location...`
         : `Photo saved (${sizes}). Location is off.`
       await render()
-      if (wantsLocation) await attachLocation(card)
+      if (wantsLocation) await attachLocation(capture)
     } catch (error) {
       message.textContent = `Could not save the photo: ${error.name}`
     }
   }
 
-  // Voice memo: tap to start, tap again to stop. The card is saved when the recording ends,
+  // Voice memo: tap to start, tap again to stop. The capture is saved when the recording ends,
   // whether you stopped it or the system did.
   let recording = null
 
@@ -257,12 +305,12 @@ export function mountInbox(parent) {
       return
     }
     const wantsLocation = locationSwitch.checked
-    const card = newCard({ kind: 'audio' })
-    card.media = { mimeType: blob.type, size: blob.size } // the type comes from the recording, never assumed
-    await saveCardWithMedia(card, blob)
+    const capture = newCapture({ kind: 'audio' })
+    capture.media = { mimeType: blob.type, size: blob.size } // the type comes from the recording, never assumed
+    await saveCaptureWithMedia(capture, blob)
     message.textContent = wantsLocation ? 'Recording saved. Looking for location...' : 'Recording saved. Location is off.'
     await render()
-    if (wantsLocation) await attachLocation(card)
+    if (wantsLocation) await attachLocation(capture)
   }
 
   recordButton.onclick = async () => {
@@ -312,7 +360,7 @@ export function mountInbox(parent) {
     // Stays on screen until the next recording starts, so it is seen even after the location message.
     if (leftScreen) {
       notice.textContent = blob
-        ? 'The recording stopped because the app left the screen. What was recorded up to that moment is saved as a card.'
+        ? 'The recording stopped because the app left the screen. What was recorded up to that moment is saved as a capture.'
         : 'The recording stopped because the app left the screen, and nothing had been recorded.'
       notice.hidden = false
     }

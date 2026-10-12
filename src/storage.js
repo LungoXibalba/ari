@@ -1,15 +1,19 @@
 // Our own small interface to the phone's database (IndexedDB). The rest of the app only calls
 // the functions exported here, so the database can be swapped later by changing this file alone.
 //
-// Two stores:
-//  - 'cards': one record per card, found by its id.
-//  - 'media': the photo or recording blob for a card, found by the same id. Kept apart so that
+// Three stores:
+//  - 'captures': one record per capture, found by its id.
+//  - 'media': the photo or recording blob for a capture, found by the same id. Kept apart so that
 //    listing the inbox never loads large files.
-//  - 'exports': for each card that has been exported (or imported), the `updated` time it had then.
-//    A card counts as "new or changed" when it has no record here or its `updated` is later.
+//  - 'exports': for each capture that has been exported (or imported), the `updated` time it had then.
+//    A capture counts as "new or changed" when it has no record here or its `updated` is later.
+//
+// Nothing is ever deleted here: "deleting" a capture moves it to the trash (a `deleted` time), and it can be restored.
+
+import { upgradeCapture } from './captures.js'
 
 const DB_NAME = 'ari'
-const DB_VERSION = 2
+const DB_VERSION = 3 // 1: cards + media. 2: + exports. 3: the 'cards' store became 'captures' (see below).
 
 let opening
 
@@ -18,12 +22,30 @@ function openDatabase() {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
     request.onupgradeneeded = (event) => {
       const db = request.result
-      if (event.oldVersion < 1) {
-        db.createObjectStore('cards', { keyPath: 'id' })
-        db.createObjectStore('media') // key is supplied when saving: the card id
+      if (event.oldVersion === 0) {
+        // A new database: create the current layout straight away.
+        db.createObjectStore('captures', { keyPath: 'id' })
+        db.createObjectStore('media') // key is supplied when saving: the capture id
+        db.createObjectStore('exports', { keyPath: 'id' }) // { id, updated }
+        return
       }
       if (event.oldVersion < 2) {
-        db.createObjectStore('exports', { keyPath: 'id' }) // { id, updated }
+        db.createObjectStore('exports', { keyPath: 'id' })
+      }
+      if (event.oldVersion < 3) {
+        // An object store cannot be renamed, so copy every record into a new one (bringing it up to the
+        // current schema on the way), then remove the old one. All of this happens inside the upgrade's own
+        // transaction: if anything fails, the whole upgrade is undone and the old data stays as it was.
+        const captures = db.createObjectStore('captures', { keyPath: 'id' })
+        request.transaction.objectStore('cards').openCursor().onsuccess = (cursorEvent) => {
+          const cursor = cursorEvent.target.result
+          if (cursor) {
+            captures.put(upgradeCapture(cursor.value))
+            cursor.continue()
+          } else {
+            db.deleteObjectStore('cards')
+          }
+        }
       }
     }
     request.onsuccess = () => {
@@ -49,63 +71,64 @@ async function inTransaction(storeNames, mode, work) {
   })
 }
 
-export function saveCard(card) {
-  return inTransaction('cards', 'readwrite', (tx) => tx.objectStore('cards').put(card))
+export function saveCapture(capture) {
+  return inTransaction('captures', 'readwrite', (tx) => tx.objectStore('captures').put(capture))
 }
 
-export function getCard(id) {
-  return inTransaction('cards', 'readonly', (tx) => tx.objectStore('cards').get(id))
+export function getCapture(id) {
+  return inTransaction('captures', 'readonly', (tx) => tx.objectStore('captures').get(id))
 }
 
-// Save a card together with its photo or recording, all-or-nothing: either both are stored or neither.
-export function saveCardWithMedia(card, blob) {
-  return inTransaction(['cards', 'media'], 'readwrite', (tx) => {
-    tx.objectStore('media').put(blob, card.id)
-    return tx.objectStore('cards').put(card)
+// Save a capture together with its photo or recording, all-or-nothing: either both are stored or neither.
+export function saveCaptureWithMedia(capture, blob) {
+  return inTransaction(['captures', 'media'], 'readwrite', (tx) => {
+    tx.objectStore('media').put(blob, capture.id)
+    return tx.objectStore('captures').put(capture)
   })
 }
 
-// The photo or recording blob for a card (undefined if it has none).
+// The photo or recording blob for a capture (undefined if it has none).
 export function getMedia(id) {
   return inTransaction('media', 'readonly', (tx) => tx.objectStore('media').get(id))
 }
 
-// Change fields on a card that is already saved (for example, attach a location that arrived later).
+// Change fields on a capture that is already saved (for example, attach a location that arrived later).
 // Reads and writes inside one transaction, so two updates cannot overwrite each other.
-export function updateCard(id, changes) {
-  return inTransaction('cards', 'readwrite', (tx) => {
-    const store = tx.objectStore('cards')
+export function updateCapture(id, changes) {
+  return inTransaction('captures', 'readwrite', (tx) => {
+    const store = tx.objectStore('captures')
     const read = store.get(id)
     read.onsuccess = () => {
-      if (!read.result) return // the card was deleted in the meantime
+      if (!read.result) return // the capture is gone
       store.put({ ...read.result, ...changes, updated: new Date().toISOString() })
     }
     return read
   })
 }
 
-// All cards, newest first.
-export async function listCards() {
-  const cards = await inTransaction('cards', 'readonly', (tx) => tx.objectStore('cards').getAll())
-  return cards.sort((a, b) => b.created.localeCompare(a.created))
+// Captures, newest first. `which` is 'active' (the inbox), 'trashed', or 'all' (what export needs).
+export async function listCaptures(which = 'active') {
+  const all = await inTransaction('captures', 'readonly', (tx) => tx.objectStore('captures').getAll())
+  const chosen = which === 'all' ? all : all.filter((capture) => (capture.deleted !== null) === (which === 'trashed'))
+  return chosen.sort((a, b) => b.created.localeCompare(a.created))
 }
 
-// Remove a card, its media and its export record together.
-export function deleteCard(id) {
-  return inTransaction(['cards', 'media', 'exports'], 'readwrite', (tx) => {
-    tx.objectStore('media').delete(id)
-    tx.objectStore('exports').delete(id)
-    return tx.objectStore('cards').delete(id)
-  })
+// Move a capture to the trash, or take it back out. Counts as a change, so the next export carries it.
+export function trashCapture(id) {
+  return updateCapture(id, { deleted: new Date().toISOString() })
 }
 
-// Export records as { [cardId]: updatedTimeWhenExported }.
+export function restoreCapture(id) {
+  return updateCapture(id, { deleted: null })
+}
+
+// Export records as { [captureId]: updatedTimeWhenExported }.
 export async function listExportRecords() {
   const records = await inTransaction('exports', 'readonly', (tx) => tx.objectStore('exports').getAll())
   return Object.fromEntries(records.map((record) => [record.id, record.updated]))
 }
 
-// Remember that these cards were exported (or imported) as they were at the given `updated` time.
+// Remember that these captures were exported (or imported) as they were at the given `updated` time.
 // `records` is a list of { id, updated }.
 export function markExported(records) {
   return inTransaction('exports', 'readwrite', (tx) => {
