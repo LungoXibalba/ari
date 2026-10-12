@@ -1,11 +1,11 @@
-// The "Back up and transfer" section: export in batches through the share sheet, and import files.
-// Export is two steps on purpose: "Export" prepares the files, then each batch has its own Share button,
+// The "Back up and transfer" section: export the history of changes in batches through the share sheet, and
+// import files from the other devices. Export is two steps on purpose: "Export" prepares the files, then each batch has its own Share button,
 // because iOS only allows sharing right after a tap and preparing photos can take a while.
 
-import { countChanged, prepareExport, shareBatch } from './export.js'
+import { countUnsent, prepareExport, shareBatch, shortId } from './export.js'
 import { formatBytes } from './format.js'
 import { importFiles } from './import.js'
-import { markExported } from './storage.js'
+import { getDeviceId, markSent } from './storage.js'
 
 // `refreshInbox` redraws the inbox after an import.
 export function mountBackup(parent, { refreshInbox }) {
@@ -13,7 +13,8 @@ export function mountBackup(parent, { refreshInbox }) {
     <section class="backup">
       <h2>Back up and transfer</h2>
       <p id="backup-summary"></p>
-      <button id="export-changed">Export new and changed</button>
+      <p id="backup-device" class="where"></p>
+      <button id="export-changed">Export new changes</button>
       <button id="export-all">Export all</button>
       <ul id="batches"></ul>
       <button id="import">Import files</button>
@@ -22,14 +23,17 @@ export function mountBackup(parent, { refreshInbox }) {
     </section>
   `
   const summary = parent.querySelector('#backup-summary')
+  getDeviceId().then((id) => {
+    parent.querySelector('#backup-device').textContent = `This device: ${shortId(id)} (named in the files it exports)`
+  })
   const batchList = parent.querySelector('#batches')
   const message = parent.querySelector('#backup-message')
   const importInput = parent.querySelector('#import-input')
 
   async function refreshSummary() {
     try {
-      const { changed, total } = await countChanged()
-      summary.textContent = `${changed} of ${total} captures are new or changed since they were last exported.`
+      const { unsent, total } = await countUnsent()
+      summary.textContent = `${unsent} of ${total} recorded changes have not been exported yet.`
     } catch {
       summary.textContent = ''
     }
@@ -48,16 +52,16 @@ export function mountBackup(parent, { refreshInbox }) {
       return
     }
     if (!batches.length) {
-      message.textContent = onlyChanged ? 'Nothing new or changed to export.' : 'No captures to export.'
+      message.textContent = onlyChanged ? 'No new changes to export.' : 'Nothing to export.'
       return
     }
-    const captureTotal = batches.reduce((total, batch) => total + batch.captures.length, 0)
-    message.textContent = `${captureTotal} capture(s) in ${batches.length} batch(es). Tap Share on each batch and choose where to save it (for example Save to Files, then OneDrive).`
+    const recordTotal = batches.reduce((total, batch) => total + batch.records.length, 0)
+    message.textContent = `${recordTotal} change(s) in ${batches.length} batch(es). Tap Share on each batch and choose where to save it (for example Save to Files, then OneDrive).`
 
     batches.forEach((batch, index) => {
       const item = document.createElement('li')
       const label = document.createElement('span')
-      label.textContent = `Batch ${index + 1} of ${batches.length}: ${batch.captures.length} capture(s), ${batch.files.length} file(s), ${formatBytes(batch.bytes)} `
+      label.textContent = `Batch ${index + 1} of ${batches.length}: ${batch.records.length} change(s), ${batch.files.length} file(s), ${formatBytes(batch.bytes)} `
       const share = document.createElement('button')
       share.className = 'small'
       share.textContent = 'Share'
@@ -67,7 +71,7 @@ export function mountBackup(parent, { refreshInbox }) {
           const result = await shareBatch(batch)
           if (result === 'shared') {
             // Marked only now, after the share sheet reported success. A cancelled or failed share marks nothing.
-            await markExported(batch.captures)
+            await markSent(batch.records.map((record) => record.id))
             label.textContent = `Batch ${index + 1} of ${batches.length}: shared. `
             share.remove()
             message.textContent = `Batch ${index + 1} shared and marked as exported.`
@@ -99,7 +103,13 @@ export function mountBackup(parent, { refreshInbox }) {
     message.textContent = `Importing ${files.length} file(s)...`
     try {
       const report = await importFiles(files)
-      const lines = [`${report.imported} imported, ${report.updated} updated, ${report.skipped} skipped.`, ...report.problems]
+      const summaryLine = `${report.applied} new change(s) applied, ${report.known} already known.`
+      const extras = [
+        report.files ? `${report.files} photo/recording file(s) stored.` : '',
+        report.waiting ? `${report.waiting} capture(s) have changes but the capture itself has not arrived yet; import its file too.` : '',
+        report.snapshots ? `${report.snapshots} snapshot file(s) ignored.` : '',
+      ].filter(Boolean)
+      const lines = [summaryLine, ...extras, ...report.problems]
       message.textContent = lines.join('\n')
       await refreshInbox()
     } catch (error) {

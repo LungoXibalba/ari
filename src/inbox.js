@@ -8,15 +8,7 @@ import { getLocation } from './location.js'
 import { shrinkPhoto } from './photo.js'
 import { startRecording } from './recorder.js'
 import { attachLocationEnabled, setAttachLocationEnabled } from './settings.js'
-import {
-  getMedia,
-  listCaptures,
-  restoreCapture,
-  saveCapture,
-  saveCaptureWithMedia,
-  trashCapture,
-  updateCapture,
-} from './storage.js'
+import { createCapture, getMedia, listCaptures, restoreCapture, setCaptureFields, trashCapture } from './storage.js'
 
 const KIND_NAMES = { text: 'Note', photo: 'Photo', audio: 'Voice memo' }
 
@@ -184,7 +176,7 @@ export function mountInbox(parent) {
             message.textContent = 'A note needs text.'
             return
           }
-          await updateCapture(capture.id, {
+          await setCaptureFields(capture.id, {
             text,
             title: values.title.trim() || null,
             place: values.place.trim() || null,
@@ -195,7 +187,7 @@ export function mountInbox(parent) {
         onCancel: () => finish(),
         onRemoveLocation: async () => {
           if (!confirm('Remove the coordinates from this capture? This cannot be undone.')) return false
-          await updateCapture(capture.id, { location: null })
+          await setCaptureFields(capture.id, { location: null })
           return true
         },
       }),
@@ -244,7 +236,7 @@ export function mountInbox(parent) {
   async function attachLocation(capture) {
     const location = await getLocation()
     if (location) {
-      await updateCapture(capture.id, { location })
+      await setCaptureFields(capture.id, { location })
       message.textContent = 'Saved with location.'
     } else {
       message.textContent = 'Saved. No location (denied, no signal, or too slow).'
@@ -261,7 +253,7 @@ export function mountInbox(parent) {
     try {
       const wantsLocation = locationSwitch.checked
       const capture = newCapture({ kind: 'text', text })
-      await saveCapture(capture)
+      await createCapture(capture)
       note.value = ''
       message.textContent = wantsLocation ? 'Saved. Looking for location...' : 'Saved. Location is off.'
       await render()
@@ -283,7 +275,7 @@ export function mountInbox(parent) {
       const photo = await shrinkPhoto(file)
       const capture = newCapture({ kind: 'photo' })
       capture.media = { mimeType: photo.type || file.type, size: photo.size } // the type comes from the data, never assumed
-      await saveCaptureWithMedia(capture, photo)
+      await createCapture(capture, photo)
       const sizes = `${formatBytes(file.size)} to ${formatBytes(photo.size)}`
       message.textContent = wantsLocation
         ? `Photo saved (${sizes}). Looking for location...`
@@ -307,7 +299,7 @@ export function mountInbox(parent) {
     const wantsLocation = locationSwitch.checked
     const capture = newCapture({ kind: 'audio' })
     capture.media = { mimeType: blob.type, size: blob.size } // the type comes from the recording, never assumed
-    await saveCaptureWithMedia(capture, blob)
+    await createCapture(capture, blob)
     message.textContent = wantsLocation ? 'Recording saved. Looking for location...' : 'Recording saved. Location is off.'
     await render()
     if (wantsLocation) await attachLocation(capture)
