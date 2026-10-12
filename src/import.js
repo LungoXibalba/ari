@@ -2,7 +2,7 @@
 // exists is replaced only if the incoming `updated` time is newer; otherwise it is skipped.
 
 import { SCHEMA_VERSION } from './cards.js'
-import { FORMAT, FORMAT_VERSION } from './export.js'
+import { FORMAT, FORMAT_VERSION, OLD_FORMAT, OLD_FORMAT_VERSION } from './export.js'
 import { getCard, getMedia, markExported, saveCard, saveCardWithMedia } from './storage.js'
 
 const KINDS = ['text', 'photo', 'audio']
@@ -50,6 +50,23 @@ export function cleanCard(card) {
   }
 }
 
+// The list of { card, mediaFile } in one index file. Reads the current format (one index per batch)
+// and the old one (one file per card).
+function readItems(parsed) {
+  if (parsed?.format === FORMAT) {
+    if (!isNumber(parsed.formatVersion) || parsed.formatVersion > FORMAT_VERSION) {
+      throw new Error('made by a newer version of the app; update the app first')
+    }
+    if (!Array.isArray(parsed.cards)) throw new Error('the file lists no cards')
+    return parsed.cards
+  }
+  if (parsed?.format === OLD_FORMAT) {
+    if (parsed.formatVersion !== OLD_FORMAT_VERSION) throw new Error('made by a newer version of the app; update the app first')
+    return [{ card: parsed.card, mediaFile: parsed.mediaFile }]
+  }
+  throw new Error('not an ARI export file')
+}
+
 // Import the chosen files (a FileList or array). Returns { imported, updated, skipped, problems }.
 export async function importFiles(fileList) {
   const files = [...fileList]
@@ -59,50 +76,58 @@ export async function importFiles(fileList) {
   const usedNames = new Set()
   const marks = []
 
-  if (!jsonFiles.length) report.problems.push('No card files (.json) were selected.')
+  if (!jsonFiles.length) report.problems.push('No export files (.json) were selected.')
 
   for (const file of jsonFiles) {
+    let items
     try {
-      const parsed = JSON.parse(await file.text())
-      if (parsed?.format !== FORMAT) throw new Error('not an ARI card file')
-      if (!isNumber(parsed.formatVersion) || parsed.formatVersion > FORMAT_VERSION) {
-        throw new Error('made by a newer version of the app; update the app first')
-      }
-      const card = cleanCard(parsed.card)
+      items = readItems(JSON.parse(await file.text()))
       usedNames.add(file.name)
-
-      // The photo or recording: found by the file name written in the card file, and checked by size.
-      let blob = null
-      let mediaProblem = null // only reported if the card is actually imported or updated
-      if (card.media) {
-        const mediaFile = isText(parsed.mediaFile) ? byName.get(parsed.mediaFile) : null
-        if (mediaFile && mediaFile.size === card.media.size) {
-          blob = new Blob([mediaFile], { type: card.media.mimeType })
-          usedNames.add(mediaFile.name)
-        } else if (!parsed.mediaFile) {
-          mediaProblem = `${file.name}: exported without its photo or recording`
-        } else if (mediaFile) {
-          mediaProblem = `${file.name}: ${parsed.mediaFile} has the wrong size, so it was not used`
-        } else {
-          mediaProblem = `${file.name}: ${parsed.mediaFile} was not selected`
-        }
-      }
-
-      const existing = await getCard(card.id)
-      let action = 'skipped'
-      if (!existing) action = 'imported'
-      else if (card.updated > existing.updated) action = 'updated'
-      else if (blob && existing.media && !(await getMedia(card.id))) action = 'updated' // restores a missing file
-
-      if (action !== 'skipped') {
-        if (mediaProblem) report.problems.push(mediaProblem)
-        // Without a usable file, an existing photo or recording stays as it is.
-        await (blob ? saveCardWithMedia(card, blob) : saveCard(card))
-        marks.push({ id: card.id, updated: card.updated })
-      }
-      report[action]++
     } catch (error) {
       report.problems.push(`${file.name}: ${error.message}`)
+      continue
+    }
+
+    // Each card is handled on its own, so one bad card does not stop the others.
+    for (const item of items) {
+      const label = `${file.name}, card ${String(item?.card?.id ?? '?').slice(0, 8)}`
+      try {
+        const card = cleanCard(item?.card)
+
+        // The photo or recording: found by the file name written in the index, and checked by size.
+        let blob = null
+        let mediaProblem = null // only reported if the card is actually imported or updated
+        if (card.media) {
+          const mediaName = isText(item.mediaFile) ? item.mediaFile : null
+          const mediaFile = mediaName && byName.get(mediaName)
+          if (mediaFile && mediaFile.size === card.media.size) {
+            blob = new Blob([mediaFile], { type: card.media.mimeType })
+            usedNames.add(mediaFile.name)
+          } else if (!mediaName) {
+            mediaProblem = `${label}: exported without its photo or recording`
+          } else if (mediaFile) {
+            mediaProblem = `${label}: ${mediaName} has the wrong size, so it was not used`
+          } else {
+            mediaProblem = `${label}: ${mediaName} was not selected`
+          }
+        }
+
+        const existing = await getCard(card.id)
+        let action = 'skipped'
+        if (!existing) action = 'imported'
+        else if (card.updated > existing.updated) action = 'updated'
+        else if (blob && existing.media && !(await getMedia(card.id))) action = 'updated' // restores a missing file
+
+        if (action !== 'skipped') {
+          if (mediaProblem) report.problems.push(mediaProblem)
+          // Without a usable file, an existing photo or recording stays as it is.
+          await (blob ? saveCardWithMedia(card, blob) : saveCard(card))
+          marks.push({ id: card.id, updated: card.updated })
+        }
+        report[action]++
+      } catch (error) {
+        report.problems.push(`${label}: ${error.message}`)
+      }
     }
   }
 

@@ -1,17 +1,19 @@
-// Turns cards into files for sharing: one .json per card, plus its photo or recording as a normal
-// .jpg / .m4a next to it, named alike. Also splits the files into batches and shares a batch.
-// The file format is described in CLAUDE.md ("Export files").
+// Turns cards into files for sharing. Each batch is one small index file (.json) listing the cards in
+// the batch, plus each photo or recording as a normal file (.jpg / .m4a) next to it.
+// Also splits the cards into batches and shares a batch. The format is described in CLAUDE.md ("Export files").
 
 import { getMedia, listCards, listExportRecords } from './storage.js'
 
-export const FORMAT = 'ari-card'
-export const FORMAT_VERSION = 1
+export const FORMAT = 'ari-cards' // current: one index file per batch
+export const FORMAT_VERSION = 2
+export const OLD_FORMAT = 'ari-card' // version 1: one file per card; still readable on import
+export const OLD_FORMAT_VERSION = 1
 
 // A batch ends when adding the next card would pass either limit. A single card larger than the
 // size limit goes alone in its own batch (a photo or recording cannot be split).
 // The size limit is a guess: no test has shared anything bigger than about 100 KB (see CLAUDE.md).
 export const MAX_BATCH_BYTES = 25 * 1024 * 1024
-export const MAX_BATCH_FILES = 100 // only a sanity limit, so a thousand tiny notes are not one huge share
+export const MAX_BATCH_FILES = 100 // counts the index file too; only a sanity limit
 
 const EXTENSIONS = {
   'image/jpeg': 'jpg',
@@ -35,7 +37,7 @@ export function extensionFor(mimeType) {
   return EXTENSIONS[baseMimeType(mimeType)] || 'bin'
 }
 
-// A file name that sorts by time and cannot collide: ari-2026-10-11T19-28-03Z-3f2a9c1e
+// A media file name that sorts by time and cannot collide: ari-2026-10-11T19-28-03Z-3f2a9c1e
 export function fileBaseName(card) {
   const time = card.created.replace(/:/g, '-').replace(/\.\d+Z$/, 'Z')
   return `ari-${time}-${card.id.slice(0, 8)}`
@@ -47,17 +49,19 @@ export function changedCards(cards, records) {
 }
 
 // Pure batching rule, kept separate so it can be tested on its own.
-// `entries` are { card: { id, updated }, files: File[], bytes } in the order they should be shared.
+// `entries` are { card: { id, updated }, item, files: File[] (media only), bytes } in the order they should be shared.
+// Returns batches of { items, files, cards, bytes }; the index file is added later, so one file is reserved for it.
 export function planBatches(entries, maxBytes = MAX_BATCH_BYTES, maxFiles = MAX_BATCH_FILES) {
   const batches = []
   let current = null
   for (const entry of entries) {
     const fits =
-      current && current.bytes + entry.bytes <= maxBytes && current.files.length + entry.files.length <= maxFiles
+      current && current.bytes + entry.bytes <= maxBytes && current.files.length + entry.files.length + 1 <= maxFiles
     if (!fits) {
-      current = { files: [], cards: [], bytes: 0 }
+      current = { items: [], files: [], cards: [], bytes: 0 }
       batches.push(current)
     }
+    current.items.push(entry.item)
     current.files.push(...entry.files)
     current.cards.push(entry.card)
     current.bytes += entry.bytes
@@ -66,23 +70,22 @@ export function planBatches(entries, maxBytes = MAX_BATCH_BYTES, maxFiles = MAX_
 }
 
 async function buildEntry(card) {
-  const base = fileBaseName(card)
   const files = []
   let mediaFile = null
   if (card.media) {
     const blob = await getMedia(card.id)
     if (blob) {
-      mediaFile = `${base}.${extensionFor(card.media.mimeType)}`
+      mediaFile = `${fileBaseName(card)}.${extensionFor(card.media.mimeType)}`
       const type = baseMimeType(card.media.mimeType) || 'application/octet-stream'
       files.push(new File([blob], mediaFile, { type }))
     }
   }
-  const json = JSON.stringify({ format: FORMAT, formatVersion: FORMAT_VERSION, card, mediaFile }, null, 2)
-  files.unshift(new File([json], `${base}.json`, { type: 'application/json' }))
+  const item = { card, mediaFile }
   return {
     card: { id: card.id, updated: card.updated }, // the `updated` time as exported, not as it may be edited later
+    item,
     files,
-    bytes: files.reduce((total, file) => total + file.size, 0),
+    bytes: files.reduce((total, file) => total + file.size, 0) + JSON.stringify(item).length,
   }
 }
 
@@ -98,7 +101,17 @@ export async function prepareExport({ onlyChanged }) {
   const chosen = (onlyChanged ? changedCards(cards, records) : cards).sort((a, b) => a.created.localeCompare(b.created))
   const entries = []
   for (const card of chosen) entries.push(await buildEntry(card))
-  return planBatches(entries)
+  const batches = planBatches(entries)
+
+  // One index file per batch. The time in its name is the same for every batch of this export, so they sort together.
+  const exportedAt = new Date().toISOString()
+  const stamp = exportedAt.replace(/:/g, '-').replace(/\.\d+Z$/, 'Z')
+  batches.forEach((batch, index) => {
+    const indexJson = JSON.stringify({ format: FORMAT, formatVersion: FORMAT_VERSION, exportedAt, cards: batch.items }, null, 2)
+    const name = `ari-cards-${stamp}-${index + 1}of${batches.length}.json`
+    batch.files.unshift(new File([indexJson], name, { type: 'application/json' }))
+  })
+  return batches
 }
 
 // Share one batch through the system share sheet. Returns 'shared', 'cancelled' or 'unsupported'; throws on failure.

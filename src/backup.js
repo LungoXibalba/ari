@@ -3,12 +3,9 @@
 // because iOS only allows sharing right after a tap and preparing photos can take a while.
 
 import { countChanged, prepareExport, shareBatch } from './export.js'
+import { formatBytes } from './format.js'
 import { importFiles } from './import.js'
 import { markExported } from './storage.js'
-
-function megabytes(bytes) {
-  return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 // `refreshInbox` redraws the inbox after an import.
 export function mountBackup(parent, { refreshInbox }) {
@@ -60,7 +57,7 @@ export function mountBackup(parent, { refreshInbox }) {
     batches.forEach((batch, index) => {
       const item = document.createElement('li')
       const label = document.createElement('span')
-      label.textContent = `Batch ${index + 1} of ${batches.length}: ${batch.cards.length} card(s), ${batch.files.length} file(s), ${megabytes(batch.bytes)} `
+      label.textContent = `Batch ${index + 1} of ${batches.length}: ${batch.cards.length} card(s), ${batch.files.length} file(s), ${formatBytes(batch.bytes)} `
       const share = document.createElement('button')
       share.className = 'small'
       share.textContent = 'Share'

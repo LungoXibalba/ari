@@ -2,7 +2,9 @@
 
 import { describeLocation, newCard } from './cards.js'
 import { buildEditForm } from './edit-form.js'
+import { formatBytes } from './format.js'
 import { getLocation } from './location.js'
+import { shrinkPhoto } from './photo.js'
 import { startRecording } from './recorder.js'
 import { attachLocationEnabled, setAttachLocationEnabled } from './settings.js'
 import { deleteCard, getMedia, listCards, saveCard, saveCardWithMedia, updateCard } from './storage.js'
@@ -229,10 +231,15 @@ export function mountInbox(parent) {
     if (!file) return // the camera was cancelled
     try {
       const wantsLocation = locationSwitch.checked
+      message.textContent = 'Shrinking the photo...'
+      const photo = await shrinkPhoto(file)
       const card = newCard({ kind: 'photo' })
-      card.media = { mimeType: file.type, size: file.size } // the type comes from the file, never assumed
-      await saveCardWithMedia(card, file)
-      message.textContent = wantsLocation ? 'Photo saved. Looking for location...' : 'Photo saved. Location is off.'
+      card.media = { mimeType: photo.type || file.type, size: photo.size } // the type comes from the data, never assumed
+      await saveCardWithMedia(card, photo)
+      const sizes = `${formatBytes(file.size)} to ${formatBytes(photo.size)}`
+      message.textContent = wantsLocation
+        ? `Photo saved (${sizes}). Looking for location...`
+        : `Photo saved (${sizes}). Location is off.`
       await render()
       if (wantsLocation) await attachLocation(card)
     } catch (error) {
